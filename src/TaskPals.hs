@@ -12,6 +12,7 @@ type ObjId = Int
 type TaskId = Int
 
 data Location = OnMap (Int, Int) | InObj ObjId
+
 data Work = Work
     { _workTask :: TaskId
     , _workComplete :: Int
@@ -27,17 +28,19 @@ data Obj = Obj
 
 -- items function as available skills
 
-data SkillType = Combat | Medic | Mechanic | Chemist | Hacker
+data SkillType = Combat | Medical | Mechanical | Chemical | Hacking
 
-data TaskType = Open | Break | Unlock | Hack | Fix | Barricade
+-- Heal / Fix undoes progress on Break?
+-- Makes a broken thing easy to destroy (logical), makes damage undo repairs (logical)
+data TaskType = Open | Break | Unlock | Hack | Fix | Heal | Barricade | Use
 
 data Skill = Skill
     { _skillType :: SkillType
     , _skillLevel :: Int
-    , _skillRange :: Int
     , _skillSpeed :: Int
     }
 
+-- Is outcome needed or can it be computed from TaskType?
 data Task = Task
     { _taskName :: Text
     , _taskType :: TaskType
@@ -50,9 +53,6 @@ data Task = Task
     } 
 
 makeFields ''Obj
+makeFields ''Work
 makeFields ''Skill
-makeFields ''Task
-
-{-logWork :: Pal -> Skill -> Task -> Task-}
-{-logWork pal skill task = task & completed -~ (skill ^. level)-}
-
+makeFields ''Task 
