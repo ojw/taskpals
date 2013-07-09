@@ -1,4 +1,5 @@
-{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, TypeSynonymInstances, FlexibleInstances,
+             DeriveFunctor #-}
 
 module TaskPals where
 
@@ -67,13 +68,19 @@ data Skill = Skill
     , _skillSpeed :: Int
     }
 
+data Visibility a = Visible a | Invisible Int a deriving (Ord, Eq, Functor)
+
+see :: Visibility a -> a
+see (Visible a) = a
+see (Invisible _ a) = a
+
 data Task = Task
     { _taskName :: Text
     , _taskTaskType :: TaskType
     , _taskSkill :: SkillType
     , _taskDifficulty :: Int
-    , _taskWorkRequired :: Int
-    , _taskWorkCompleted :: Int
+    , _taskWorkRequired :: Visibility Int
+    , _taskWorkCompleted :: Visibility Int
     , _taskObject :: ObjId
     , _taskOutcome :: World -> World -- ? or Task -> World -> World or something else
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
@@ -202,11 +209,11 @@ workIsComplete work = view complete work >= 100
 
 applyWork :: Work -> World -> World
 applyWork work world
-    | workIsComplete work = over tasks (I.adjust (over workCompleted succ) (view task work)) world
+    | workIsComplete work = over tasks (I.adjust (over workCompleted (fmap succ)) (view task work)) world
     | otherwise           = world
 
 logWork :: Int -> Task -> Task
-logWork int = workCompleted +~ int
+logWork int = over workCompleted (fmap (+int))
 
 tickWork' :: Time -> ObjId -> World -> Maybe Work
 tickWork' time objId world = do
