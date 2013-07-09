@@ -36,14 +36,14 @@ data World = World
 data Obj = Obj
     { _objObjId :: ObjId
     , _objTask :: TaskSystem
-    , _objSpace :: SpacialSystem
+    , _objSpace :: SpatialSystem
     }
 
-data SpacialSystem = SpacialSystem
-    { _spacialsystemLocation :: Location
-    , _spacialsystemShape :: Shape
-    , _spacialsystemDestination :: Maybe Destination
-    , _spacialsystemSpeed :: Speed
+data SpatialSystem = SpatialSystem
+    { _spatialsystemLocation :: Location
+    , _spatialsystemShape :: Shape
+    , _spatialsystemDestination :: Maybe Destination
+    , _spatialsystemSpeed :: Speed
     }
 
 data Location = OnMap (X,Y) | InObj ObjId (X,Y)
@@ -80,7 +80,7 @@ data Task = Task
     } 
 
 makeFields ''TaskSystem
-makeFields ''SpacialSystem
+makeFields ''SpatialSystem
 makeFields ''Obj
 makeFields ''Work
 makeFields ''Skill
@@ -104,6 +104,8 @@ _y = lens getY setY where
     setY loc y' = case loc of
         OnMap (x,y) -> OnMap (x,y')
         InObj objId (x,y) -> InObj objId (x,y')
+
+-- LocationSystem
 
 moveBy :: (X,Y) -> Obj -> Obj
 moveBy (x,y) obj = case obj^.space.location of
@@ -184,9 +186,10 @@ moveObj time obj world = case nextStep time obj world of
 moveInWorld :: Time -> Obj -> World -> World
 moveInWorld time obj world = objs %~ (I.insert (obj^.objId) (moveObj time obj world)) $ world
 
-moveObjs :: Time -> World -> World
-moveObjs time world = I.foldr (moveInWorld time) world (world^.objs)
+moveWorld :: Time -> World -> World
+moveWorld time world = I.foldr (moveInWorld time) world (world^.objs)
 
+-- TaskSystem
 
 getSkill :: SkillType -> Obj -> Skill
 getSkill skillType obj = fromMaybe (Skill skillType 0  0) (M.lookup skillType (view (task.skills) obj))
@@ -237,4 +240,4 @@ tickTasks :: World -> World
 tickTasks world = I.foldr tickTask world (view tasks world)
 
 tickWorld :: Time -> World -> World
-tickWorld time world = moveObjs time $ tickTasks $ tickWorks time world
+tickWorld time world = moveWorld time $ tickTasks $ tickWorks time world
