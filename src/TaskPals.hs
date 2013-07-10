@@ -1,5 +1,5 @@
 {-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, TypeSynonymInstances, FlexibleInstances,
-             DeriveFunctor #-}
+             DeriveFunctor, OverloadedStrings #-}
 
 module TaskPals where
 
@@ -24,10 +24,10 @@ type Width = Double
 type Height = Double
 type Speed = Double
 
-data SkillType = Combat | Medical | Mechanical | Chemical | Hacking | Observation
+data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
     deriving (Eq, Ord, Show)
 
-data TaskType = Open | Break | Unlock | Hack | Fix | Heal | Barricade | Use
+data TaskType = Open | Close | Break | Unlock | Hack | Fix | Heal | Barricade | Use
 
 data World = World
     { _worldObjs :: IntMap Obj
@@ -82,9 +82,13 @@ data Task = Task
     , _taskWorkRequired :: Visibility Int
     , _taskWorkCompleted :: Visibility Int
     , _taskObject :: ObjId
-    , _taskOutcome :: World -> World -- ? or Task -> World -> World or something else
+    , _taskOutcome :: [TaskEvent] -- World -> World -- ? or Task -> World -> World or something else
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
     } 
+
+data Target = Self | AtObj ObjId | InRadiusOf (X,Y) Radius | InRectangle (X,Y) (Width, Height)
+
+data TaskEvent = None | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork TaskType Int Target | RemoveThisObj
 
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
@@ -111,6 +115,39 @@ _y = lens getY setY where
     setY loc y' = case loc of
         OnMap (x,y) -> OnMap (x,y')
         InObj objId (x,y) -> InObj objId (x,y')
+
+obj :: Obj
+obj = Obj 0 (TaskSystem [] M.empty Nothing) (SpatialSystem (OnMap (0,0)) (Circle 10) Nothing 10)
+
+open :: Task
+open = Task "Open" Open Labor 1 (Visible 1) (Visible 0) 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
+
+close :: Task
+close = Task "Close" Close Labor 1 (Visible 1) (Visible 0) 0 [RemoveThisTask, AddTask open, SetBlocking True] 0
+
+break :: Task
+break = Task "Break" Break Labor 2 (Visible 10) (Visible 0) 0 [RemoveThisObj] 0
+
+hardBreak :: Task
+hardBreak = TaskPals.break & difficulty .~ 3 & workRequired .~ (Visible 20)
+
+modObj :: ObjId -> (Obj -> Obj) -> World -> World
+modObj objId f world = objs %~ (I.adjust f objId) $ world
+
+modTask :: TaskId -> (Task -> Task) -> World -> World
+modTask taskId f world = tasks %~ (I.adjust f taskId) $ world
+
+modTaskObj :: TaskId -> (Obj -> Obj) -> World -> World
+modTaskObj taskId f world = case I.lookup taskId (world^.tasks) of
+    Nothing -> world
+    Just task -> modObj (task^.object) f world
+
+removeTask :: TaskId -> World -> World
+removeTask taskId world = tasks %~ I.delete taskId $ modTaskObj taskId (over (task.tasks) (filter (/= taskId))) world
+
+{-runEvent :: TaskId -> ObjId -> Event -> World -> World-}
+{-runEvent _ _ None world = world-}
+{-runEvent taskId objId RemoveThisTask =-}
 
 -- LocationSystem
 
@@ -240,7 +277,7 @@ taskIsComplete task = view workCompleted task >= view workRequired task
 
 tickTask :: Task -> World -> World
 tickTask task world
-    | taskIsComplete task = view outcome task world 
+    | taskIsComplete task = world -- view outcome task world 
     | otherwise           =  world
 
 tickTasks :: World -> World
