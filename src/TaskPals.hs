@@ -27,7 +27,7 @@ type Speed = Double
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
     deriving (Eq, Ord, Show)
 
-data TaskType = Open | Close | Break | Unlock | Hack | Fix | Heal | Barricade | Use
+data WorkType = Open | Close | Break | Unlock | Hack | Fix | Heal | Barricade | Use
 
 data World = World
     { _worldObjs :: IntMap Obj
@@ -76,7 +76,7 @@ data Skill = Skill
 
 data Task = Task
     { _taskName :: Text
-    , _taskTaskType :: TaskType
+    , _taskWorkType :: WorkType
     , _taskSkill :: SkillType
     , _taskDifficulty :: Int
     , _taskWorkRequired :: Int
@@ -88,7 +88,7 @@ data Task = Task
 
 data Target = Self | AtObj ObjId | InRadiusOf (X,Y) Radius | InRectangle (X,Y) (Width, Height)
 
-data TaskEvent = None | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork TaskType Int Target | RemoveThisObj
+data TaskEvent = None | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj
 
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
