@@ -68,19 +68,19 @@ data Skill = Skill
     , _skillSpeed :: Int
     }
 
-data Visibility a = Visible a | Invisible Int a deriving (Ord, Eq, Functor)
+{-data Visibility a = Visible a | Invisible Int a deriving (Ord, Eq, Functor)-}
 
-see :: Visibility a -> a
-see (Visible a) = a
-see (Invisible _ a) = a
+{-see :: Visibility a -> a-}
+{-see (Visible a) = a-}
+{-see (Invisible _ a) = a-}
 
 data Task = Task
     { _taskName :: Text
     , _taskTaskType :: TaskType
     , _taskSkill :: SkillType
     , _taskDifficulty :: Int
-    , _taskWorkRequired :: Visibility Int
-    , _taskWorkCompleted :: Visibility Int
+    , _taskWorkRequired :: Int
+    , _taskWorkCompleted :: Int
     , _taskObject :: ObjId
     , _taskOutcome :: [TaskEvent] -- World -> World -- ? or Task -> World -> World or something else
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
@@ -120,16 +120,16 @@ obj :: Obj
 obj = Obj 0 (TaskSystem [] M.empty Nothing) (SpatialSystem (OnMap (0,0)) (Circle 10) Nothing 10)
 
 open :: Task
-open = Task "Open" Open Labor 1 (Visible 1) (Visible 0) 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
+open = Task "Open" Open Labor 1 1 0 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
 
 close :: Task
-close = Task "Close" Close Labor 1 (Visible 1) (Visible 0) 0 [RemoveThisTask, AddTask open, SetBlocking True] 0
+close = Task "Close" Close Labor 1 1 0 0 [RemoveThisTask, AddTask open, SetBlocking True] 0
 
 break :: Task
-break = Task "Break" Break Labor 2 (Visible 10) (Visible 0) 0 [RemoveThisObj] 0
+break = Task "Break" Break Labor 2 10 0 0 [RemoveThisObj] 0
 
 hardBreak :: Task
-hardBreak = TaskPals.break & difficulty .~ 3 & workRequired .~ (Visible 20)
+hardBreak = TaskPals.break & difficulty .~ 3 & workRequired .~ 20
 
 modObj :: ObjId -> (Obj -> Obj) -> World -> World
 modObj objId f world = objs %~ (I.adjust f objId) $ world
@@ -246,17 +246,17 @@ workIsComplete work = view complete work >= 100
 
 applyWork :: Work -> World -> World
 applyWork work world
-    | workIsComplete work = over tasks (I.adjust (over workCompleted (fmap succ)) (view task work)) world
+    | workIsComplete work = world & tasks.at (work^.task).traverse.workCompleted +~ 1 
     | otherwise           = world
 
 logWork :: Int -> Task -> Task
-logWork int = over workCompleted (fmap (+int))
+logWork int = workCompleted +~ int
 
 tickWork' :: Time -> ObjId -> World -> Maybe Work
 tickWork' time objId world = do
-    obj <- I.lookup objId (view objs world)
-    work <- view (task.work) obj
-    task <- I.lookup (view task work) (view tasks world)
+    obj <- world^.objs.at objId
+    work <- obj^.task.work
+    task <- world^.tasks.at (work^.task)
     if canWorkOn obj task 
         then Just (complete +~ (time * fromIntegral (view level (getSkill (view skill task) obj))) $ work) 
         else Nothing
