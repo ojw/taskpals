@@ -32,6 +32,8 @@ data WorkType = Open | Close | Break | Unlock | Hack | Fix | Heal | Barricade | 
 data World = World
     { _worldObjs :: IntMap Obj
     , _worldTasks :: IntMap Task
+    , _worldNextObj :: Int
+    , _worldNextTask :: Int
     }
 
 data Obj = Obj
@@ -45,21 +47,27 @@ data SpatialSystem = SpatialSystem
     , _spatialsystemShape :: Shape
     , _spatialsystemDestination :: Maybe Destination
     , _spatialsystemSpeed :: Speed
+    , _spatialsystemBlocking :: Bool
     }
 
 data Location = OnMap (X,Y) | InObj ObjId (X,Y)
 data Shape = Circle Radius | Rectangle Width Height
 data Destination = ToMap (X,Y) | ToObj ObjId | ToTask TaskId
 
+data Goal = NoGoal | GoTo Location | WorkOn Task
+
 data TaskSystem = TaskSystem
     { _tasksystemTasks :: [TaskId]
     , _tasksystemSkills :: Map SkillType Skill
     , _tasksystemWork :: Maybe Work
+    , _tasksystemGoal :: Goal
     }
 
 data Work = Work
     { _workTask :: TaskId
     , _workComplete :: Double
+    , _workTarget :: Maybe Target -- I think this is the safest place for target (obj whose work completes task picks target)
+    , _workLevel :: Int -- is same as objs' skill level... duplication bad and hopefully temporary
     }
 
 data Skill = Skill
@@ -86,9 +94,9 @@ data Task = Task
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
     } 
 
-data Target = Self | AtObj ObjId | InRadiusOf (X,Y) Radius | InRectangle (X,Y) (Width, Height)
+data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle (X,Y) Radius | InRectangle (X,Y) (Width, Height)
 
-data TaskEvent = None | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj
+data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj
 
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
@@ -116,8 +124,24 @@ _y = lens getY setY where
         OnMap (x,y) -> OnMap (x,y')
         InObj objId (x,y) -> InObj objId (x,y')
 
+-- Event system
+
+inTarget :: Target -> ObjId -> Obj -> Bool
+inTarget target objId obj = False
+
+runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
+runEvent taskId objId ResetThisTask world = world & tasks.at taskId.traversed.workCompleted .~ 0
+runEvent taskId objId RemoveThisTask world = removeTask taskId world
+runEvent taskId objId (AddTask task') world = world & nextObj %~ succ 
+                                                    & tasks %~ I.insert (world^.nextObj) task' 
+                                                    & objs.at objId.traversed.task.tasks <>~ pure (world^.nextObj)
+runEvent taskId objId (SetBlocking blocking') world = world & objs.at objId.traversed.space.blocking .~ blocking'
+runEvent taskId objId (CreateWork workType amount target) world = world 
+runEvent taskId objId RemoveThisObj world = world & objs %~ sans objId
+
+
 obj :: Obj
-obj = Obj 0 (TaskSystem [] M.empty Nothing) (SpatialSystem (OnMap (0,0)) (Circle 10) Nothing 10)
+obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal) (SpatialSystem (OnMap (0,0)) (Circle 10) Nothing 10 True)
 
 open :: Task
 open = Task "Open" Open Labor 1 1 0 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
@@ -145,11 +169,10 @@ modTaskObj taskId f world = case I.lookup taskId (world^.tasks) of
 removeTask :: TaskId -> World -> World
 removeTask taskId world = tasks %~ I.delete taskId $ modTaskObj taskId (over (task.tasks) (filter (/= taskId))) world
 
-{-runEvent :: TaskId -> ObjId -> Event -> World -> World-}
-{-runEvent _ _ None world = world-}
-{-runEvent taskId objId RemoveThisTask =-}
+-- LocationSystem 
 
--- LocationSystem
+speedConstant :: Double
+speedConstant = 1
 
 moveBy :: (X,Y) -> Obj -> Obj
 moveBy (x,y) obj = case obj^.space.location of
@@ -186,8 +209,8 @@ circleAndRectangleOverlap (x1,y1,r) (x2,y2,w,h) =
     ||
     any (flip surrounds (x1,y1)) [(Rectangle (w+2*r) h, (x2-r,y2)), (Rectangle w (h+2*r), (x2, y2-r))]
 
-collide :: Obj -> Obj -> Bool
-collide obj1 obj2
+overlap :: Obj -> Obj -> Bool
+overlap obj1 obj2
     | inSameSpace obj1 obj2 = 
         let loc1 = obj1^.space.location
             loc2 = obj2^.space.location
@@ -201,6 +224,9 @@ collide obj1 obj2
             (Circle r, Rectangle w h) -> circleAndRectangleOverlap (loc1^._x, loc1^._y, r) (loc2^._x, loc2^._y, w, h)
             (Rectangle w h, Circle r) -> circleAndRectangleOverlap (loc2^._x, loc2^._y, r) (loc1^._x, loc1^._y, w, h)
     | otherwise = False
+
+collide :: Obj -> Obj -> Bool
+collide obj1 obj2 = overlap obj1 obj2 && (obj1^.space.blocking && obj2^.space.blocking)
 
 collidesWithAny :: Obj -> World -> Bool
 collidesWithAny obj world = I.null $ I.filter (collide obj) (world ^. objs)
@@ -220,7 +246,7 @@ nextStep time obj world = case destinationCoordinates obj world of
     Just (x2,y2) -> let (x1,y1) = coordinates obj
                         hyp = (x2-x1)^^2 + (y2-y1)^^2
                         s = obj^.space.speed in
-                    Just (time/1000 * s * (x2-x1)/hyp, time/1000 * s * (y2-y1)/hyp)
+                    Just (time/1000 * s * (x2-x1)/hyp, speedConstant * time * s * (y2-y1)/hyp)
 
 moveObj :: Time -> Obj -> World -> Obj
 moveObj time obj world = case nextStep time obj world of
@@ -235,6 +261,9 @@ moveWorld time world = I.foldr (moveInWorld time) world (world^.objs)
 
 -- TaskSystem
 
+workConstant :: Double
+workConstant = 1
+
 getSkill :: SkillType -> Obj -> Skill
 getSkill skillType obj = fromMaybe (Skill skillType 0  0) (M.lookup skillType (view (task.skills) obj))
 
@@ -246,7 +275,7 @@ workIsComplete work = view complete work >= 100
 
 applyWork :: Work -> World -> World
 applyWork work world
-    | workIsComplete work = world & tasks.at (work^.task).traverse.workCompleted +~ 1 
+    | workIsComplete work = world & tasks.at (work^.task).traverse.workCompleted +~ work^.level
     | otherwise           = world
 
 logWork :: Int -> Task -> Task
@@ -258,7 +287,7 @@ tickWork' time objId world = do
     work <- obj^.task.work
     task <- world^.tasks.at (work^.task)
     if canWorkOn obj task 
-        then Just (complete +~ (time * fromIntegral (view level (getSkill (view skill task) obj))) $ work) 
+        then Just (complete +~ (workConstant * time * fromIntegral (view level (getSkill (view skill task) obj))) $ work) 
         else Nothing
 
 tickWork'' :: Time -> ObjId -> World -> World
