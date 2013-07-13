@@ -1,5 +1,5 @@
-{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, TypeSynonymInstances, FlexibleInstances,
-             DeriveFunctor, OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, 
+    TypeSynonymInstances, FlexibleInstances, DeriveFunctor, OverloadedStrings #-}
 
 module TaskPals where
 
@@ -27,7 +27,7 @@ type Speed = Double
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
     deriving (Eq, Ord, Show)
 
-data WorkType = Open | Close | Break | Unlock | Hack | Fix | Heal | Barricade | Use
+data WorkType = Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
 
 data World = World
     { _worldObjs :: IntMap Obj
@@ -45,16 +45,15 @@ data Obj = Obj
 data SpatialSystem = SpatialSystem
     { _spatialsystemLocation :: Location
     , _spatialsystemShape :: Shape
-    , _spatialsystemDestination :: Maybe Destination
     , _spatialsystemSpeed :: Speed
+    , _spatialsystemDestination :: Maybe Destination
     , _spatialsystemBlocking :: Bool
     }
 
 data Location = OnMap (X,Y) | InObj ObjId (X,Y)
 data Shape = Circle Radius | Rectangle Width Height
 data Destination = ToMap (X,Y) | ToObj ObjId | ToTask TaskId
-
-data Goal = NoGoal | GoTo Location | WorkOn Task
+data Goal = NoGoal | GoTo Destination | WorkOn TaskId
 
 data TaskSystem = TaskSystem
     { _tasksystemTasks :: [TaskId]
@@ -75,12 +74,6 @@ data Skill = Skill
     , _skillLevel :: Int
     , _skillSpeed :: Int
     }
-
-{-data Visibility a = Visible a | Invisible Int a deriving (Ord, Eq, Functor)-}
-
-{-see :: Visibility a -> a-}
-{-see (Visible a) = a-}
-{-see (Invisible _ a) = a-}
 
 data Task = Task
     { _taskName :: Text
@@ -141,7 +134,7 @@ runEvent taskId objId RemoveThisObj world = world & objs %~ sans objId
 
 
 obj :: Obj
-obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal) (SpatialSystem (OnMap (0,0)) (Circle 10) Nothing 10 True)
+obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal) (SpatialSystem (OnMap (0,0)) (Circle 10) 10 Nothing True)
 
 open :: Task
 open = Task "Open" Open Labor 1 1 0 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
@@ -167,7 +160,7 @@ modTaskObj taskId f world = case I.lookup taskId (world^.tasks) of
     Just task -> modObj (task^.object) f world
 
 removeTask :: TaskId -> World -> World
-removeTask taskId world = tasks %~ I.delete taskId $ modTaskObj taskId (over (task.tasks) (filter (/= taskId))) world
+removeTask taskId = tasks %~ I.delete taskId -- objs working on taskId will give up next tick
 
 -- LocationSystem 
 
@@ -179,11 +172,13 @@ moveBy (x,y) obj = case obj^.space.location of
     OnMap (x1,y1) -> obj & space.location .~ OnMap (x+x1, y+y1)
     InObj objId (x1,y1) -> obj & space.location .~ InObj objId (x+x1, y+y1)
 
+inSameSpace' :: Location -> Location -> Bool
+inSameSpace' (OnMap (x1,y1)) (OnMap (x2,y2)) = True
+inSameSpace' (InObj obj1 (x1,y1)) (InObj obj2 (x2,y2)) = obj1 == obj2
+inSameSpace' _  _ = False
+
 inSameSpace :: Obj -> Obj -> Bool
-inSameSpace obj1 obj2 = case (obj1^.space.location, obj2^.space.location) of
-    (OnMap (x1,y1), OnMap (x2,y2)) -> True
-    (InObj obj1 (x1,y1), InObj obj2 (x2,y2)) -> obj1 == obj2
-    _ -> False
+inSameSpace obj1 obj2 = inSameSpace' (obj1^.space.location) (obj2^.space.location)
 
 coordinates :: Obj -> (X,Y)
 coordinates obj = case obj^.space.location of
@@ -209,21 +204,22 @@ circleAndRectangleOverlap (x1,y1,r) (x2,y2,w,h) =
     ||
     any (flip surrounds (x1,y1)) [(Rectangle (w+2*r) h, (x2-r,y2)), (Rectangle w (h+2*r), (x2, y2-r))]
 
-overlap :: Obj -> Obj -> Bool
-overlap obj1 obj2
-    | inSameSpace obj1 obj2 = 
-        let loc1 = obj1^.space.location
-            loc2 = obj2^.space.location
-            shape1 = obj1^.space.shape
-            shape2 = obj2^.space.shape in
+overlap' :: (Location, Shape) -> (Location, Shape) -> Bool
+overlap' (loc1, shape1) (loc2, shape2)
+    | inSameSpace' loc1 loc2 = 
         case (shape1, shape2) of
             (Circle r1, Circle r2) -> 
                 (loc1^._x - loc2^._x)^^2 + (loc1^._y - loc2^._y)^^2 <= (r1 + r2)^^2
             (Rectangle w1 h1, Rectangle w2 h2) ->
                 rectanglesOverlap (loc1^._x,loc1^._y) (w1,h1) (loc2^._x,loc2^._y) (w2,h2)
-            (Circle r, Rectangle w h) -> circleAndRectangleOverlap (loc1^._x, loc1^._y, r) (loc2^._x, loc2^._y, w, h)
-            (Rectangle w h, Circle r) -> circleAndRectangleOverlap (loc2^._x, loc2^._y, r) (loc1^._x, loc1^._y, w, h)
+            (Circle r, Rectangle w h) -> 
+                circleAndRectangleOverlap (loc1^._x, loc1^._y, r) (loc2^._x, loc2^._y, w, h)
+            (Rectangle w h, Circle r) -> 
+                circleAndRectangleOverlap (loc2^._x, loc2^._y, r) (loc1^._x, loc1^._y, w, h)
     | otherwise = False
+
+overlap :: Obj -> Obj -> Bool
+overlap obj1 obj2 = overlap' (obj1^.space.location, obj1^.space.shape) (obj2^.space.location, obj2^.space.shape)
 
 collide :: Obj -> Obj -> Bool
 collide obj1 obj2 = overlap obj1 obj2 && (obj1^.space.blocking && obj2^.space.blocking)
@@ -232,13 +228,16 @@ collidesWithAny :: Obj -> World -> Bool
 collidesWithAny obj world = I.null $ I.filter (collide obj) (world ^. objs)
 
 destinationCoordinates :: Obj -> World -> Maybe (X,Y)
-destinationCoordinates obj world = case obj^.space.destination of
-    Just (ToMap (x,y)) -> Just (x,y)
-    Just (ToObj objId) -> fmap coordinates $ I.lookup objId (world^.objs)
-    Just (ToTask taskId) -> coordinates <$> do
+destinationCoordinates obj world = case obj^.task.goal of
+    GoTo (ToMap (x,y))-> Just (x,y)
+    GoTo (ToObj objId)-> fmap coordinates $ I.lookup objId (world^.objs)
+    GoTo (ToTask taskId)-> coordinates <$> do
         task <- I.lookup taskId (world^.tasks)
         I.lookup (task^.object) (world^.objs)
-    Nothing -> Nothing
+    WorkOn taskId -> coordinates <$> do
+        task <- I.lookup taskId (world^.tasks)
+        I.lookup (task^.object) (world^.objs)
+    NoGoal -> Nothing
 
 nextStep :: Time -> Obj -> World -> Maybe (X,Y)
 nextStep time obj world = case destinationCoordinates obj world of
@@ -281,36 +280,42 @@ applyWork work world
 logWork :: Int -> Task -> Task
 logWork int = workCompleted +~ int
 
-tickWork' :: Time -> ObjId -> World -> Maybe Work
-tickWork' time objId world = do
-    obj <- world^.objs.at objId
-    work <- obj^.task.work
-    task <- world^.tasks.at (work^.task)
-    if canWorkOn obj task 
-        then Just (complete +~ (workConstant * time * fromIntegral (view level (getSkill (view skill task) obj))) $ work) 
-        else Nothing
-
-tickWork'' :: Time -> ObjId -> World -> World
-tickWork'' time objId world = case tickWork' time objId world of
-    Nothing -> over objs (I.adjust (set (task.work) Nothing) objId) world
+tickWork :: Time -> ObjId -> World -> World
+tickWork time objId world = case mWork of
+    Nothing -> world & objs.at objId.traversed.task.work .~ Nothing
+                     & objs.at objId.traversed.task.goal %~ \g -> case g of
+                        WorkOn _ -> NoGoal
+                        goal -> goal
     Just work' -> if workIsComplete work' 
         then applyWork work' $
-             over objs (I.adjust (set (task.work) Nothing) objId) world 
-        else over objs (I.adjust (set (task.work) (Just work')) objId) world
+             world & objs.at objId.traversed.task.work .~ Nothing
+        else world & objs.at objId.traversed.task.work .~ Just work'
+  where
+    mWork = do
+        obj <- world^.objs.at objId
+        work <- obj^.task.work
+        task <- world^.tasks.at (work^.task)
+        if canWorkOn obj task 
+            then Just (complete +~ (workConstant * time * fromIntegral 
+                        (view level (getSkill (view skill task) obj))) $ work)
+            else Nothing
 
 tickWorks :: Time -> World -> World
-tickWorks time world = foldr (tickWork'' time) world (I.keys $ view objs world)
+tickWorks time world = foldr (tickWork time) world (I.keys $ view objs world)
+
+tick :: Time -> World -> World
+tick time world = undefined
 
 taskIsComplete :: Task -> Bool
 taskIsComplete task = view workCompleted task >= view workRequired task
 
-tickTask :: Task -> World -> World
-tickTask task world
-    | taskIsComplete task = world -- view outcome task world 
-    | otherwise           =  world
+tickTask :: TaskId -> Task -> World -> World
+tickTask taskId task world  
+    | taskIsComplete task = foldr (runEvent taskId (task^.object)) world (task^.outcome)
+    | otherwise = world
 
 tickTasks :: World -> World
-tickTasks world = I.foldr tickTask world (view tasks world)
+tickTasks world = I.foldWithKey tickTask world (world^.tasks)
 
 tickWorld :: Time -> World -> World
 tickWorld time world = moveWorld time $ tickTasks $ tickWorks time world
