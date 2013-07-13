@@ -52,7 +52,7 @@ data SpatialSystem = SpatialSystem
 
 data Location = OnMap (X,Y) | InObj ObjId (X,Y)
 data Shape = Circle Radius | Rectangle Width Height
-data Destination = ToMap (X,Y) | ToObj ObjId | ToTask TaskId
+data Destination = ToMap (X,Y) | ToObj ObjId -- -- | ToTask TaskId
 data Goal = NoGoal | GoTo Destination | WorkOn TaskId
 
 data TaskSystem = TaskSystem
@@ -89,7 +89,7 @@ data Task = Task
 
 data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle (X,Y) Radius | InRectangle (X,Y) (Width, Height)
 
-data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj
+data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
 
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
@@ -125,13 +125,13 @@ inTarget target objId obj = False
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
 runEvent taskId objId ResetThisTask world = world & tasks.at taskId.traversed.workCompleted .~ 0
 runEvent taskId objId RemoveThisTask world = removeTask taskId world
-runEvent taskId objId (AddTask task') world = world & nextObj %~ succ 
-                                                    & tasks %~ I.insert (world^.nextObj) task' 
-                                                    & objs.at objId.traversed.task.tasks <>~ pure (world^.nextObj)
+runEvent taskId objId (AddTask task') world = world & nextTask %~ succ 
+                                                    & tasks %~ I.insert (world^.nextTask) task' 
+                                                    & objs.at objId.traversed.task.tasks <>~ pure (world^.nextTask)
 runEvent taskId objId (SetBlocking blocking') world = world & objs.at objId.traversed.space.blocking .~ blocking'
 runEvent taskId objId (CreateWork workType amount target) world = world 
 runEvent taskId objId RemoveThisObj world = world & objs %~ sans objId
-
+runEvent taskId objId (ReplaceThisObjWith obj') world = world & objs %~ I.insert objId obj'
 
 obj :: Obj
 obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal) (SpatialSystem (OnMap (0,0)) (Circle 10) 10 Nothing True)
@@ -231,9 +231,9 @@ destinationCoordinates :: Obj -> World -> Maybe (X,Y)
 destinationCoordinates obj world = case obj^.task.goal of
     GoTo (ToMap (x,y))-> Just (x,y)
     GoTo (ToObj objId)-> fmap coordinates $ I.lookup objId (world^.objs)
-    GoTo (ToTask taskId)-> coordinates <$> do
-        task <- I.lookup taskId (world^.tasks)
-        I.lookup (task^.object) (world^.objs)
+    {-GoTo (ToTask taskId)-> coordinates <$> do-}
+        {-task <- I.lookup taskId (world^.tasks)-}
+        {-I.lookup (task^.object) (world^.objs)-}
     WorkOn taskId -> coordinates <$> do
         task <- I.lookup taskId (world^.tasks)
         I.lookup (task^.object) (world^.objs)
@@ -247,13 +247,13 @@ nextStep time obj world = case destinationCoordinates obj world of
                         s = obj^.space.speed in
                     Just (time/1000 * s * (x2-x1)/hyp, speedConstant * time * s * (y2-y1)/hyp)
 
-moveObj :: Time -> Obj -> World -> Obj
-moveObj time obj world = case nextStep time obj world of
-    Nothing -> space.destination .~ Nothing $ obj
+moveObj :: Time -> World -> Obj -> Obj
+moveObj time world obj = case nextStep time obj world of
+    Nothing -> obj -- blocking shouldn't cause obj to give up on movement -- space.destination .~ Nothing $ obj
     Just (x,y) -> if collidesWithAny (moveBy (x,y) obj) world then obj else moveBy (x,y) obj
 
 moveInWorld :: Time -> Obj -> World -> World
-moveInWorld time obj world = objs %~ (I.insert (obj^.objId) (moveObj time obj world)) $ world
+moveInWorld time obj world = world & objs %~ (I.adjust (moveObj time world) (obj^.objId))
 
 moveWorld :: Time -> World -> World
 moveWorld time world = I.foldr (moveInWorld time) world (world^.objs)
@@ -263,9 +263,15 @@ moveWorld time world = I.foldr (moveInWorld time) world (world^.objs)
 workConstant :: Double
 workConstant = 1
 
+isWorkingOnTask :: Obj -> TaskId -> Bool
+isWorkingOnTask obj taskId = case (obj^.task.goal, obj^.task.work) of
+    (WorkOn taskId', Just work) -> taskId' == work^.task
+    _ -> False
+
 getSkill :: SkillType -> Obj -> Skill
 getSkill skillType obj = fromMaybe (Skill skillType 0  0) (M.lookup skillType (view (task.skills) obj))
 
+-- missing location check
 canWorkOn :: Obj -> Task -> Bool
 canWorkOn obj task = getSkill (task^.skill) obj ^. level >= task ^. difficulty 
 
@@ -274,11 +280,8 @@ workIsComplete work = view complete work >= 100
 
 applyWork :: Work -> World -> World
 applyWork work world
-    | workIsComplete work = world & tasks.at (work^.task).traverse.workCompleted +~ work^.level
+    | workIsComplete work = world & tasks.at (work^.task).traverse %~ \tsk -> tsk & workCompleted +~ (work^.level - tsk^.difficulty)
     | otherwise           = world
-
-logWork :: Int -> Task -> Task
-logWork int = workCompleted +~ int
 
 tickWork :: Time -> ObjId -> World -> World
 tickWork time objId world = case mWork of
@@ -289,15 +292,16 @@ tickWork time objId world = case mWork of
     Just work' -> if workIsComplete work' 
         then applyWork work' $
              world & objs.at objId.traversed.task.work .~ Nothing
+                   & objs.at objId.traversed.task.goal .~ NoGoal
         else world & objs.at objId.traversed.task.work .~ Just work'
   where
     mWork = do
         obj <- world^.objs.at objId
-        work <- obj^.task.work
-        task <- world^.tasks.at (work^.task)
-        if canWorkOn obj task 
+        objWork <- obj^.task.work
+        objTask <- world^.tasks.at (objWork^.task)
+        if canWorkOn obj objTask && isWorkingOnTask obj (objWork^.task)
             then Just (complete +~ (workConstant * time * fromIntegral 
-                        (view level (getSkill (view skill task) obj))) $ work)
+                        (view level (getSkill (view skill objTask) obj))) $ objWork)
             else Nothing
 
 tickWorks :: Time -> World -> World
