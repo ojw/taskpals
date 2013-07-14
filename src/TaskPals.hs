@@ -1,5 +1,6 @@
 {-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, 
-    TypeSynonymInstances, FlexibleInstances, DeriveFunctor, OverloadedStrings #-}
+    TypeSynonymInstances, FlexibleInstances, DeriveFunctor, OverloadedStrings,
+    FlexibleContexts #-}
 
 module TaskPals where
 
@@ -12,6 +13,8 @@ import qualified Data.Text as T
 import Data.Map (Map)
 import qualified Data.Map as M
 import Data.Maybe
+import Control.Monad.State
+import Control.Monad.Reader
 
 type ObjId = Int
 type TaskId = Int
@@ -23,11 +26,17 @@ type Radius = Double
 type Width = Double
 type Height = Double
 type Speed = Double
+type Player = Text
 
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
     deriving (Eq, Ord, Show)
 
 data WorkType = Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
+
+data Game = Game
+    { _gamePlayers :: Map Player [ObjId]
+    , _gameState :: World
+    }
 
 data World = World
     { _worldObjs :: IntMap Obj
@@ -98,6 +107,7 @@ makeFields ''Work
 makeFields ''Skill
 makeFields ''Task 
 makeFields ''World
+makeFields ''Game
 
 _x :: Lens Location Location X X
 _x = lens getX setX where
@@ -255,13 +265,16 @@ moveObj time world obj = case nextStep time obj world of
 moveInWorld :: Time -> Obj -> World -> World
 moveInWorld time obj world = world & objs %~ (I.adjust (moveObj time world) (obj^.objId))
 
-moveWorld :: Time -> World -> World
-moveWorld time world = I.foldr (moveInWorld time) world (world^.objs)
+tickLocations :: Time -> World -> World
+tickLocations time world = I.foldr (moveInWorld time) world (world^.objs)
 
 -- TaskSystem
 
 workConstant :: Double
 workConstant = 1
+
+setGoal :: ObjId -> Goal -> World -> World
+setGoal objId goal' = objs.at objId.traversed.task.goal .~ goal'
 
 isWorkingOnTask :: Obj -> TaskId -> Bool
 isWorkingOnTask obj taskId = case (obj^.task.goal, obj^.task.work) of
@@ -307,9 +320,6 @@ tickWork time objId world = case mWork of
 tickWorks :: Time -> World -> World
 tickWorks time world = foldr (tickWork time) world (I.keys $ view objs world)
 
-tick :: Time -> World -> World
-tick time world = undefined
-
 taskIsComplete :: Task -> Bool
 taskIsComplete task = view workCompleted task >= view workRequired task
 
@@ -322,4 +332,62 @@ tickTasks :: World -> World
 tickTasks world = I.foldWithKey tickTask world (world^.tasks)
 
 tickWorld :: Time -> World -> World
-tickWorld time world = moveWorld time $ tickTasks $ tickWorks time world
+tickWorld time world = tickLocations time $ tickTasks $ tickWorks time world
+
+addTask :: MonadState World m => Task -> m TaskId
+addTask task = do
+    taskId <- nextTask <%= succ
+    tasks %= I.insert taskId task
+    return taskId
+
+addObj :: MonadState World m => Obj -> m ObjId
+addObj obj = do
+    objId <- nextObj <%= succ
+    objs %= I.insert objId obj
+    return objId
+
+authenticateGoals :: Game -> [(Player, (ObjId, Goal))] -> [(ObjId, Goal)]
+authenticateGoals game = map snd . (filter $ \(player, (objId, goal)) -> 
+    objId `elem` (M.findWithDefault [] player (game^.players)))
+
+-- rewrite with monads, cleaner separation
+
+tick :: Time -> [(Player, (ObjId, Goal))] -> ReaderT Time (State Game) ()
+tick time goals = do
+    game <- get
+    let goals' = authenticateGoals game goals
+    zoom TaskPals.state $ do
+        updateGoals goals'
+        tickMovement
+        tickWorkNew
+        events <- tickTasksNew
+        runEvents events
+
+updateGoals :: (MonadReader Time m, MonadState World m) => [(ObjId, Goal)] -> m ()
+updateGoals goals = do
+    world <- get
+    put $ foldr (uncurry setGoal) world goals
+
+tickMovement :: (MonadReader Time m, MonadState World m) => m ()
+tickMovement = do
+    world <- get
+    time <- ask
+    put $ I.foldr (moveInWorld time) world (world^.objs)
+
+tickWorkNew :: (MonadReader Time m, MonadState World m) => m ()
+tickWorkNew = undefined
+
+tickTasksNew :: (MonadReader Time m, MonadState World m) => m [(TaskId, ObjId, TaskEvent)]
+tickTasksNew = do
+    world <- get
+    return $ I.foldWithKey tickTaskNew [] (world^.tasks)
+
+tickTaskNew :: TaskId -> Task -> [(TaskId, ObjId, TaskEvent)] -> [(TaskId, ObjId, TaskEvent)]
+tickTaskNew taskId task events
+    | taskIsComplete task = events ++ map ((,,) taskId (task^.object)) (task^.outcome)
+    | otherwise = events
+
+runEvents :: (MonadReader Time m, MonadState World m) => [(TaskId, ObjId, TaskEvent)] -> m ()
+runEvents events = do
+    world <- get
+    put $ foldr (\(taskId, objId, event) -> runEvent taskId objId event) world events
