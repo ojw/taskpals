@@ -27,11 +27,13 @@ type Width = Double
 type Height = Double
 type Speed = Double
 type Player = Text
+type Tag = Text
 
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
     deriving (Eq, Ord, Show)
 
 data WorkType = Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
+    deriving (Eq, Ord, Show)
 
 data Game = Game
     { _gamePlayers :: Map Player [ObjId]
@@ -49,6 +51,7 @@ data Obj = Obj
     { _objObjId :: ObjId
     , _objTask :: TaskSystem
     , _objSpace :: SpatialSystem
+    , _objTags :: [Tag]
     }
 
 data SpatialSystem = SpatialSystem
@@ -64,11 +67,15 @@ data Shape = Circle Radius | Rectangle Width Height
 data Destination = ToMap (X,Y) | ToObj ObjId -- -- | ToTask TaskId
 data Goal = NoGoal | GoTo Destination | WorkOn TaskId
 
+data GoalPref = NeverAct | UseSkill SkillType | WorkOnType WorkType | GoalPrefs [GoalPref]
+    | Target GoalPref
+
 data TaskSystem = TaskSystem
     { _tasksystemTasks :: [TaskId]
     , _tasksystemSkills :: Map SkillType Skill
     , _tasksystemWork :: Maybe Work
     , _tasksystemGoal :: Goal
+    , _tasksystemGoalPref :: GoalPref
     }
 
 data Work = Work
@@ -96,7 +103,7 @@ data Task = Task
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
     } 
 
-data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle (X,Y) Radius | InRectangle (X,Y) (Width, Height)
+data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle Location Radius | InRectangle Location (Width, Height) {- | WithTag -}
 
 data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
 
@@ -127,10 +134,42 @@ _y = lens getY setY where
         OnMap (x,y) -> OnMap (x,y')
         InObj objId (x,y) -> InObj objId (x,y')
 
+-- Goal system
+
+-- This ignores distance, whether obj reasonably knows about aspects of the world, etc
+chooseGoal :: GoalPref -> World -> Maybe Goal
+chooseGoal NeverAct _ = Nothing
+chooseGoal (UseSkill skillType) world = case I.elems $ I.mapMaybeWithKey  (\taskId task -> if skillType == task^.skill then Just taskId else Nothing) (world^.tasks) of
+    [] -> Nothing
+    (taskId:tasksIds) -> Just (WorkOn taskId)
+chooseGoal (WorkOnType workType') world = case I.elems $ I.mapMaybeWithKey (\taskId task -> if workType' == task^.workType then Just taskId else Nothing) (world^.tasks) of
+    [] -> Nothing
+    (taskId:tasksIds) -> Just (WorkOn taskId)
+chooseGoal (GoalPrefs (pref:prefs)) world = case chooseGoal pref world of
+    Nothing -> chooseGoal (GoalPrefs prefs) world
+    Just goal -> Just goal
+    
+
 -- Event system
 
-inTarget :: Target -> ObjId -> Obj -> Bool
-inTarget target objId obj = False
+inTarget :: Target -> ObjId -> ObjId -> World -> Bool
+inTarget None _ _ _ = False
+inTarget Self targetter target world = targetter == target
+inTarget (AtObj targetId) targetter target world = targetId == target
+inTarget (WithinRadius radius) targetter target world = maybe False (uncurry overlap') $ do
+    loc1 <- world^.objs.at targetter <&> (^.space.location)
+    loc2 <- world^.objs.at target <&> (^.space.location)
+    shape2 <- world^.objs.at target <&> (^.space.shape)
+    return ((loc1, Circle radius), (loc2, shape2))
+inTarget (InCircle locatn radius) targetter target world = maybe False (uncurry overlap') $ do
+    loc <- world^.objs.at target <&> (^.space.location)
+    shape <- world^.objs.at target <&> (^.space.shape)
+    return ((locatn, Circle radius), (loc, shape))
+inTarget (InRectangle locatn (width, height)) targetter target world = maybe False (uncurry overlap') $ do
+    loc <- world^.objs.at target <&> (^.space.location)
+    shape <- world^.objs.at target <&> (^.space.shape)
+    return ((locatn, Rectangle width height), (loc, shape))
+    
 
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
 runEvent taskId objId ResetThisTask world = world & tasks.at taskId.traversed.workCompleted .~ 0
@@ -144,7 +183,7 @@ runEvent taskId objId RemoveThisObj world = world & objs %~ sans objId
 runEvent taskId objId (ReplaceThisObjWith obj') world = world & objs %~ I.insert objId obj'
 
 obj :: Obj
-obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal) (SpatialSystem (OnMap (0,0)) (Circle 10) 10 Nothing True)
+obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal NeverAct) (SpatialSystem (OnMap (0,0)) (Circle 10) 10 Nothing True) []
 
 open :: Task
 open = Task "Open" Open Labor 1 1 0 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
