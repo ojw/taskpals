@@ -30,29 +30,29 @@ type Player = Text
 type Tag = Text
 
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord, Read, Show)
 
 data WorkType = Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
-    deriving (Eq, Ord, Show)
+    deriving (Eq, Ord, Read, Show)
 
 data Game = Game
     { _gamePlayers :: Map Player [ObjId]
     , _gameState :: World
-    }
+    } deriving (Read, Show)
 
 data World = World
     { _worldObjs :: IntMap Obj
     , _worldTasks :: IntMap Task
     , _worldNextObj :: Int
     , _worldNextTask :: Int
-    }
+    } deriving (Read, Show)
 
 data Obj = Obj
     { _objObjId :: ObjId
     , _objTask :: TaskSystem
     , _objSpace :: SpatialSystem
     , _objTags :: [Tag]
-    }
+    } deriving (Read, Show)
 
 data SpatialSystem = SpatialSystem
     { _spatialsystemLocation :: Location
@@ -60,15 +60,16 @@ data SpatialSystem = SpatialSystem
     , _spatialsystemSpeed :: Speed
     , _spatialsystemDestination :: Maybe Destination
     , _spatialsystemBlocking :: Bool
-    }
+    } deriving (Read, Show)
 
-data Location = OnMap (X,Y) | InObj ObjId (X,Y)
-data Shape = Circle Radius | Rectangle Width Height
-data Destination = ToMap (X,Y) | ToObj ObjId -- -- | ToTask TaskId
-data Goal = NoGoal | GoTo Destination | WorkOn TaskId
+data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show)
+data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show)
+data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show)-- -- | ToTask TaskId
+data Goal = NoGoal | GoTo Destination | WorkOn TaskId deriving (Read, Show)
 
 data GoalPref = NeverAct | UseSkill SkillType | WorkOnType WorkType | GoalPrefs [GoalPref]
     | Target GoalPref
+    deriving (Read, Show)
 
 data TaskSystem = TaskSystem
     { _tasksystemTasks :: [TaskId]
@@ -76,20 +77,20 @@ data TaskSystem = TaskSystem
     , _tasksystemWork :: Maybe Work
     , _tasksystemGoal :: Goal
     , _tasksystemGoalPref :: GoalPref
-    }
+    } deriving (Read, Show)
 
 data Work = Work
     { _workTask :: TaskId
     , _workComplete :: Double
     , _workTarget :: Maybe Target -- I think this is the safest place for target (obj whose work completes task picks target)
     , _workLevel :: Int -- is same as objs' skill level... duplication bad and hopefully temporary
-    }
+    } deriving (Read, Show)
 
 data Skill = Skill
     { _skillSkillType :: SkillType
     , _skillLevel :: Int
     , _skillSpeed :: Int
-    }
+    } deriving (Read, Show)
 
 data Task = Task
     { _taskName :: Text
@@ -101,11 +102,13 @@ data Task = Task
     , _taskObject :: ObjId
     , _taskOutcome :: [TaskEvent] -- World -> World -- ? or Task -> World -> World or something else
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
-    } 
+    }  deriving (Read, Show)
 
 data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle Location Radius | InRectangle Location (Width, Height) {- | WithTag -}
+ deriving (Read, Show)
 
 data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
+ deriving (Read, Show)
 
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
@@ -430,3 +433,6 @@ runEvents :: (MonadReader Time m, MonadState World m) => [(TaskId, ObjId, TaskEv
 runEvents events = do
     world <- get
     put $ foldr (\(taskId, objId, event) -> runEvent taskId objId event) world events
+
+
+-- websocket server needs to: read input into (Player, ObjId, Goal); periodically write state in some form
