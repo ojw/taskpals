@@ -17,5 +17,5 @@ cabal-version:       >=1.8
 executable taskpals
   main-is:             Main.hs
   -- other-modules:       
-  build-depends:       base ==4.5.*, lens, text, bytestring, containers, mtl
+  build-depends:       base ==4.5.*, lens, text, bytestring, containers, mtl, aeson
   hs-source-dirs:      src
