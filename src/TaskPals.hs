@@ -1,10 +1,10 @@
 {-# LANGUAGE TemplateHaskell, MultiParamTypeClasses, FunctionalDependencies, 
     TypeSynonymInstances, FlexibleInstances, DeriveFunctor, OverloadedStrings,
-    FlexibleContexts #-}
+    FlexibleContexts, DeriveDataTypeable #-}
 
 module TaskPals where
 
-import Control.Lens
+import Control.Lens hiding ( (.=) )
 import Control.Applicative
 import Data.IntMap (IntMap)
 import qualified Data.IntMap as I
@@ -15,6 +15,7 @@ import qualified Data.Map as M
 import Data.Maybe
 import Control.Monad.State
 import Control.Monad.Reader
+import Data.Data
 
 type ObjId = Int
 type TaskId = Int
@@ -29,30 +30,39 @@ type Speed = Double
 type Player = Text
 type Tag = Text
 
+data Command = Command
+    { _commandPlayer :: Player
+    , _commandObjId :: ObjId
+    , _commandGoal :: Goal
+    }
+
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
-    deriving (Eq, Ord, Read, Show)
+    deriving (Eq, Ord, Read, Show, Data, Typeable)
 
 data WorkType = Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
-    deriving (Eq, Ord, Read, Show)
+    deriving (Eq, Ord, Read, Show, Data, Typeable)
 
 data Game = Game
     { _gamePlayers :: Map Player [ObjId]
     , _gameState :: World
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
 
 data World = World
     { _worldObjs :: IntMap Obj
     , _worldTasks :: IntMap Task
     , _worldNextObj :: Int
     , _worldNextTask :: Int
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
+
+blankWorld :: World
+blankWorld = World I.empty I.empty 1 1
 
 data Obj = Obj
     { _objObjId :: ObjId
     , _objTask :: TaskSystem
     , _objSpace :: SpatialSystem
     , _objTags :: [Tag]
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
 
 data SpatialSystem = SpatialSystem
     { _spatialsystemLocation :: Location
@@ -60,16 +70,19 @@ data SpatialSystem = SpatialSystem
     , _spatialsystemSpeed :: Speed
     , _spatialsystemDestination :: Maybe Destination
     , _spatialsystemBlocking :: Bool
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
 
-data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show)
-data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show)
-data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show)-- -- | ToTask TaskId
-data Goal = NoGoal | GoTo Destination | WorkOn TaskId deriving (Read, Show)
+data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Typeable)
+
+data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show, Data, Typeable)
+
+data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show, Data, Typeable)-- -- | ToTask TaskId
+
+data Goal = NoGoal | GoTo Destination | WorkOn TaskId deriving (Read, Show, Data, Typeable)
 
 data GoalPref = NeverAct | UseSkill SkillType | WorkOnType WorkType | GoalPrefs [GoalPref]
     | Target GoalPref
-    deriving (Read, Show)
+    deriving (Read, Show, Data, Typeable)
 
 data TaskSystem = TaskSystem
     { _tasksystemTasks :: [TaskId]
@@ -77,20 +90,20 @@ data TaskSystem = TaskSystem
     , _tasksystemWork :: Maybe Work
     , _tasksystemGoal :: Goal
     , _tasksystemGoalPref :: GoalPref
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
 
 data Work = Work
     { _workTask :: TaskId
     , _workComplete :: Double
     , _workTarget :: Maybe Target -- I think this is the safest place for target (obj whose work completes task picks target)
     , _workLevel :: Int -- is same as objs' skill level... duplication bad and hopefully temporary
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
 
 data Skill = Skill
     { _skillSkillType :: SkillType
     , _skillLevel :: Int
     , _skillSpeed :: Int
-    } deriving (Read, Show)
+    } deriving (Read, Show, Data, Typeable)
 
 data Task = Task
     { _taskName :: Text
@@ -99,17 +112,18 @@ data Task = Task
     , _taskDifficulty :: Int
     , _taskWorkRequired :: Int
     , _taskWorkCompleted :: Int
-    , _taskObject :: ObjId
+    , _taskOwner :: ObjId
     , _taskOutcome :: [TaskEvent] -- World -> World -- ? or Task -> World -> World or something else
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
-    }  deriving (Read, Show)
+    }  deriving (Read, Show, Data, Typeable)
 
 data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle Location Radius | InRectangle Location (Width, Height) {- | WithTag -}
- deriving (Read, Show)
+ deriving (Read, Show, Data, Typeable)
 
 data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
- deriving (Read, Show)
+ deriving (Read, Show, Data, Typeable)
 
+makeFields ''Command
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
 makeFields ''Obj
@@ -209,7 +223,7 @@ modTask taskId f world = tasks %~ (I.adjust f taskId) $ world
 modTaskObj :: TaskId -> (Obj -> Obj) -> World -> World
 modTaskObj taskId f world = case I.lookup taskId (world^.tasks) of
     Nothing -> world
-    Just task -> modObj (task^.object) f world
+    Just task -> modObj (task^.owner) f world
 
 removeTask :: TaskId -> World -> World
 removeTask taskId = tasks %~ I.delete taskId -- objs working on taskId will give up next tick
@@ -285,10 +299,10 @@ destinationCoordinates obj world = case obj^.task.goal of
     GoTo (ToObj objId)-> fmap coordinates $ I.lookup objId (world^.objs)
     {-GoTo (ToTask taskId)-> coordinates <$> do-}
         {-task <- I.lookup taskId (world^.tasks)-}
-        {-I.lookup (task^.object) (world^.objs)-}
+        {-I.lookup (task^.owner) (world^.objs)-}
     WorkOn taskId -> coordinates <$> do
         task <- I.lookup taskId (world^.tasks)
-        I.lookup (task^.object) (world^.objs)
+        I.lookup (task^.owner) (world^.objs)
     NoGoal -> Nothing
 
 nextStep :: Time -> Obj -> World -> Maybe (X,Y)
@@ -367,7 +381,7 @@ taskIsComplete task = view workCompleted task >= view workRequired task
 
 tickTask :: TaskId -> Task -> World -> World
 tickTask taskId task world  
-    | taskIsComplete task = foldr (runEvent taskId (task^.object)) world (task^.outcome)
+    | taskIsComplete task = foldr (runEvent taskId (task^.owner)) world (task^.outcome)
     | otherwise = world
 
 tickTasks :: World -> World
@@ -426,7 +440,7 @@ tickTasksNew = do
 
 tickTaskNew :: TaskId -> Task -> [(TaskId, ObjId, TaskEvent)] -> [(TaskId, ObjId, TaskEvent)]
 tickTaskNew taskId task events
-    | taskIsComplete task = events ++ map ((,,) taskId (task^.object)) (task^.outcome)
+    | taskIsComplete task = events ++ map ((,,) taskId (task^.owner)) (task^.outcome)
     | otherwise = events
 
 runEvents :: (MonadReader Time m, MonadState World m) => [(TaskId, ObjId, TaskEvent)] -> m ()
@@ -436,3 +450,4 @@ runEvents events = do
 
 
 -- websocket server needs to: read input into (Player, ObjId, Goal); periodically write state in some form
+--
