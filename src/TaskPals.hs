@@ -16,6 +16,10 @@ import Data.Maybe
 import Control.Monad.State
 import Control.Monad.Reader
 import Data.Data
+import Data.Aeson
+import Data.Aeson.TH
+import qualified Data.Char as Char
+import qualified Data.HashMap.Strict as H
 
 type ObjId = Int
 type TaskId = Int
@@ -132,6 +136,29 @@ makeFields ''Skill
 makeFields ''Task 
 makeFields ''World
 makeFields ''Game
+
+instance (Show k, ToJSON v) => ToJSON (Map k v) where
+    toJSON m = toJSON $ M.mapKeys show m
+instance FromJSON (Map SkillType Skill) where
+    parseJSON (Object v) = return $ M.fromList $ map (read . T.unpack . fst) $ H.toList v
+
+deriveJSON (dropWhile (not . Char.isUpper)) ''Skill
+deriveJSON (dropWhile (not . Char.isUpper)) ''SkillType
+deriveJSON (dropWhile (not . Char.isUpper)) ''WorkType
+deriveJSON (dropWhile (not . Char.isUpper)) ''Command
+deriveJSON (dropWhile (not . Char.isUpper)) ''Location
+deriveJSON (dropWhile (not . Char.isUpper)) ''Destination
+deriveJSON (dropWhile (not . Char.isUpper)) ''Goal
+deriveJSON (dropWhile (not . Char.isUpper)) ''World
+deriveJSON (dropWhile (not . Char.isUpper)) ''Task
+deriveJSON (dropWhile (not . Char.isUpper)) ''Obj
+deriveJSON (dropWhile (not . Char.isUpper)) ''SpatialSystem
+deriveJSON (dropWhile (not . Char.isUpper)) ''TaskSystem
+deriveJSON (dropWhile (not . Char.isUpper)) ''TaskEvent
+deriveJSON (dropWhile (not . Char.isUpper)) ''Shape
+deriveJSON (dropWhile (not . Char.isUpper)) ''GoalPref
+deriveJSON (dropWhile (not . Char.isUpper)) ''Target
+deriveJSON (dropWhile (not . Char.isUpper)) ''Work
 
 _x :: Lens Location Location X X
 _x = lens getX setX where
