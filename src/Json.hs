@@ -34,7 +34,7 @@ instance FromJSON Goal where
     parseJSON (Object v) = do
         goalType <- v .:? "goaltype" .!= "nogoal"
         case goalType of
-            ("nogoal" :: Text) -> return $ NoGoal
+            ("nogoal" :: Text) -> return NoGoal
             "destination" -> GoTo <$> v .: "destination"
     parseJSON _ = mzero
 
