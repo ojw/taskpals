@@ -139,26 +139,36 @@ makeFields ''Game
 
 instance (Show k, ToJSON v) => ToJSON (Map k v) where
     toJSON m = toJSON $ M.mapKeys show m
+-- unforgivably bad, absolutely temporary
 instance FromJSON (Map SkillType Skill) where
-    parseJSON (Object v) = return $ M.fromList $ map (read . T.unpack . fst) $ H.toList v
+    --parseJSON (Object v) = return $ M.fromList $ map (read . T.unpack . fst) $ H.toList v
+    parseJSON (Object v) = let -- return $ map (over _2 decode) $ map (over _2 encode) $ H.toList v
+        asList = H.toList v :: [(Text, Value)]
+        wacky = map (over _2 encode) asList
+        wackier = map (over _2 (Data.Maybe.fromJust . decode)) wacky :: [(Text, Skill)]
+        wackiest = map (over _1 (read . T.unpack)) wackier :: [(SkillType, Skill)]
+        in
+            return $ M.fromList wackiest
+        
+        
 
-deriveJSON (dropWhile (not . Char.isUpper)) ''Skill
-deriveJSON (dropWhile (not . Char.isUpper)) ''SkillType
-deriveJSON (dropWhile (not . Char.isUpper)) ''WorkType
-deriveJSON (dropWhile (not . Char.isUpper)) ''Command
-deriveJSON (dropWhile (not . Char.isUpper)) ''Location
-deriveJSON (dropWhile (not . Char.isUpper)) ''Destination
-deriveJSON (dropWhile (not . Char.isUpper)) ''Goal
-deriveJSON (dropWhile (not . Char.isUpper)) ''World
-deriveJSON (dropWhile (not . Char.isUpper)) ''Task
-deriveJSON (dropWhile (not . Char.isUpper)) ''Obj
-deriveJSON (dropWhile (not . Char.isUpper)) ''SpatialSystem
-deriveJSON (dropWhile (not . Char.isUpper)) ''TaskSystem
-deriveJSON (dropWhile (not . Char.isUpper)) ''TaskEvent
-deriveJSON (dropWhile (not . Char.isUpper)) ''Shape
-deriveJSON (dropWhile (not . Char.isUpper)) ''GoalPref
-deriveJSON (dropWhile (not . Char.isUpper)) ''Target
-deriveJSON (dropWhile (not . Char.isUpper)) ''Work
+deriveJSON id ''Skill
+deriveJSON id ''SkillType
+deriveJSON id ''WorkType
+deriveJSON id ''Command
+deriveJSON id ''Location
+deriveJSON id ''Destination
+deriveJSON id ''Goal
+deriveJSON id ''World
+deriveJSON id ''Task
+deriveJSON id ''Obj
+deriveJSON id ''SpatialSystem
+deriveJSON id ''TaskSystem
+deriveJSON id ''TaskEvent
+deriveJSON id ''Shape
+deriveJSON id ''GoalPref
+deriveJSON id ''Target
+deriveJSON id ''Work
 
 _x :: Lens Location Location X X
 _x = lens getX setX where
