@@ -43,7 +43,7 @@ data Command = Command
 data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Observation
     deriving (Eq, Ord, Read, Show, Data, Typeable)
 
-data WorkType = Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
+data WorkType = Generic | Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
     deriving (Eq, Ord, Read, Show, Data, Typeable)
 
 data Game = Game
@@ -61,11 +61,15 @@ data World = World
 blankWorld :: World
 blankWorld = World I.empty I.empty 1 1
 
+data ObjIdentity = ObjIdentity
+    { _objidentityName :: Text
+    , _objidentityTags :: [Tag]
+    } deriving (Read, Show, Data, Typeable)
+
 data Obj = Obj
-    { _objObjId :: ObjId
-    , _objTask :: TaskSystem
+    { _objTask :: TaskSystem
     , _objSpace :: SpatialSystem
-    , _objTags :: [Tag]
+    , _objIdentity :: ObjIdentity
     } deriving (Read, Show, Data, Typeable)
 
 data SpatialSystem = SpatialSystem
@@ -107,7 +111,7 @@ data Skill = Skill
     { _skillSkillType :: SkillType
     , _skillLevel :: Int
     , _skillSpeed :: Int
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Eq, Read, Show, Data, Typeable)
 
 data Task = Task
     { _taskName :: Text
@@ -124,9 +128,10 @@ data Task = Task
 data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle Location Radius | InRectangle Location (Width, Height) {- | WithTag -}
  deriving (Read, Show, Data, Typeable)
 
-data TaskEvent = ResetThisTask | RemoveThisTask | AddTask Task | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
+data TaskEvent = ResetThisTask | RemoveThisTask | AddTask TaskId | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
  deriving (Read, Show, Data, Typeable)
 
+makeFields ''ObjIdentity
 makeFields ''Command
 makeFields ''TaskSystem
 makeFields ''SpatialSystem
@@ -144,31 +149,30 @@ instance FromJSON (Map SkillType Skill) where
     --parseJSON (Object v) = return $ M.fromList $ map (read . T.unpack . fst) $ H.toList v
     parseJSON (Object v) = let -- return $ map (over _2 decode) $ map (over _2 encode) $ H.toList v
         asList = H.toList v :: [(Text, Value)]
-        wacky = map (over _2 encode) asList
-        wackier = map (over _2 (Data.Maybe.fromJust . decode)) wacky :: [(Text, Skill)]
+        -- withResults = map (over _2 fromJSON) asList :: [(Text, Result Skill)]
+        wackier = map (over _2 (Data.Maybe.fromJust . decode . encode)) asList :: [(Text, Skill)]
         wackiest = map (over _1 (read . T.unpack)) wackier :: [(SkillType, Skill)]
         in
             return $ M.fromList wackiest
-        
-        
 
-deriveJSON id ''Skill
-deriveJSON id ''SkillType
-deriveJSON id ''WorkType
-deriveJSON id ''Command
-deriveJSON id ''Location
-deriveJSON id ''Destination
-deriveJSON id ''Goal
-deriveJSON id ''World
-deriveJSON id ''Task
-deriveJSON id ''Obj
-deriveJSON id ''SpatialSystem
-deriveJSON id ''TaskSystem
-deriveJSON id ''TaskEvent
-deriveJSON id ''Shape
-deriveJSON id ''GoalPref
-deriveJSON id ''Target
-deriveJSON id ''Work
+deriveJSON (dropWhile (not . Char.isUpper)) ''Skill
+deriveJSON (dropWhile (not . Char.isUpper)) ''SkillType
+deriveJSON (dropWhile (not . Char.isUpper)) ''WorkType
+deriveJSON (dropWhile (not . Char.isUpper)) ''Command
+deriveJSON (dropWhile (not . Char.isUpper)) ''Location
+deriveJSON (dropWhile (not . Char.isUpper)) ''Destination
+deriveJSON (dropWhile (not . Char.isUpper)) ''Goal
+deriveJSON (dropWhile (not . Char.isUpper)) ''World
+deriveJSON (dropWhile (not . Char.isUpper)) ''Task
+deriveJSON (dropWhile (not . Char.isUpper)) ''SpatialSystem
+deriveJSON (dropWhile (not . Char.isUpper)) ''Obj
+deriveJSON (dropWhile (not . Char.isUpper)) ''ObjIdentity
+deriveJSON (dropWhile (not . Char.isUpper)) ''TaskSystem
+deriveJSON (dropWhile (not . Char.isUpper)) ''TaskEvent
+deriveJSON (dropWhile (not . Char.isUpper)) ''Shape
+deriveJSON (dropWhile (not . Char.isUpper)) ''GoalPref
+deriveJSON (dropWhile (not . Char.isUpper)) ''Target
+deriveJSON (dropWhile (not . Char.isUpper)) ''Work
 
 _x :: Lens Location Location X X
 _x = lens getX setX where
@@ -228,39 +232,24 @@ inTarget (InRectangle locatn (width, height)) targetter target world = maybe Fal
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
 runEvent taskId objId ResetThisTask world = world & tasks.at taskId.traversed.workCompleted .~ 0
 runEvent taskId objId RemoveThisTask world = removeTask taskId world
-runEvent taskId objId (AddTask task') world = world & nextTask %~ succ 
-                                                    & tasks %~ I.insert (world^.nextTask) task' 
-                                                    & objs.at objId.traversed.task.tasks <>~ pure (world^.nextTask)
+runEvent taskId objId (AddTask taskId') world = world & objs.at objId.traversed.task.tasks <>~ [taskId']
 runEvent taskId objId (SetBlocking blocking') world = world & objs.at objId.traversed.space.blocking .~ blocking'
 runEvent taskId objId (CreateWork workType amount target) world = world 
 runEvent taskId objId RemoveThisObj world = world & objs %~ sans objId
 runEvent taskId objId (ReplaceThisObjWith obj') world = world & objs %~ I.insert objId obj'
 
-obj :: Obj
-obj = Obj 0 (TaskSystem [] M.empty Nothing NoGoal NeverAct) (SpatialSystem (OnMap (0,0)) (Circle 10) 10 Nothing True) []
+modObj :: (MonadState World m) => ObjId -> (Obj -> Obj) -> m () -- World -> World
+modObj objId f = modify $ objs %~ (I.adjust f objId)
 
-open :: Task
-open = Task "Open" Open Labor 1 1 0 0 [RemoveThisTask, AddTask close, SetBlocking False] 0
+modTask :: (MonadState World m) => TaskId -> (Task -> Task) -> m () -- World -> World
+modTask taskId f = modify $ tasks %~ (I.adjust f taskId)
 
-close :: Task
-close = Task "Close" Close Labor 1 1 0 0 [RemoveThisTask, AddTask open, SetBlocking True] 0
-
-break :: Task
-break = Task "Break" Break Labor 2 10 0 0 [RemoveThisObj] 0
-
-hardBreak :: Task
-hardBreak = TaskPals.break & difficulty .~ 3 & workRequired .~ 20
-
-modObj :: ObjId -> (Obj -> Obj) -> World -> World
-modObj objId f world = objs %~ (I.adjust f objId) $ world
-
-modTask :: TaskId -> (Task -> Task) -> World -> World
-modTask taskId f world = tasks %~ (I.adjust f taskId) $ world
-
-modTaskObj :: TaskId -> (Obj -> Obj) -> World -> World
-modTaskObj taskId f world = case I.lookup taskId (world^.tasks) of
-    Nothing -> world
-    Just task -> modObj (task^.owner) f world
+modTaskObj :: (MonadState World m) => TaskId -> (Obj -> Obj) -> m () -- World -> World
+modTaskObj taskId f = do
+    world <- get    
+    case I.lookup taskId (world^.tasks) of
+        Nothing -> put world
+        Just task -> modObj (task^.owner) f
 
 removeTask :: TaskId -> World -> World
 removeTask taskId = tasks %~ I.delete taskId -- objs working on taskId will give up next tick
@@ -355,11 +344,12 @@ moveObj time world obj = case nextStep time obj world of
     Nothing -> obj -- blocking shouldn't cause obj to give up on movement -- space.destination .~ Nothing $ obj
     Just (x,y) -> if collidesWithAny (moveBy (x,y) obj) world then obj else moveBy (x,y) obj
 
-moveInWorld :: Time -> Obj -> World -> World
-moveInWorld time obj world = world & objs %~ (I.adjust (moveObj time world) (obj^.objId))
+moveInWorld :: Time -> ObjId -> World -> World
+moveInWorld time objId world = world & objs %~ (I.adjust (moveObj time world) (objId))
 
 tickLocations :: Time -> World -> World
-tickLocations time world = I.foldr (moveInWorld time) world (world^.objs)
+-- tickLocations time world = I.foldr (moveInWorld time) world (world^.objs)
+tickLocations time world = foldr (moveInWorld time) world (I.keys $ world^.objs)
 
 -- TaskSystem
 
@@ -465,7 +455,7 @@ tickMovement :: (MonadReader Time m, MonadState World m) => m ()
 tickMovement = do
     world <- get
     time <- ask
-    put $ I.foldr (moveInWorld time) world (world^.objs)
+    put $ foldr (moveInWorld time) world (I.keys $ world^.objs)
 
 tickWorkNew :: (MonadReader Time m, MonadState World m) => m ()
 tickWorkNew = undefined
