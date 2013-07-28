@@ -278,8 +278,8 @@ coordinates obj = case obj^.space.location of
     InObj _ (x,y) -> (x,y)
 
 surrounds :: (Shape, Point) -> Point -> Bool
-surrounds ((Rectangle w h), (x,y)) (x',y') = x <= x' && x' <= x+w && y <= y' && y' <= y+h
-surrounds ((Circle r), (x,y)) (x',y') = (x-x')^^2 + (y-y')^^2 <= r^^2
+surrounds (Rectangle w h, (x,y)) (x',y') = x <= x' && x' <= x+w && y <= y' && y' <= y+h
+surrounds (Circle r, (x,y)) (x',y') = (x-x')^^2 + (y-y')^^2 <= r^^2
 
 between :: (X,Y) -> (X,Y) -> (X,Y) -> Bool
 between (x1,y1) (x2,y2) (testX, testY) = x1 <= testX && testX <= x2 && y1 <= testY && testY <= y2
@@ -292,9 +292,9 @@ rectanglesOverlap (x1,y1) (w1,h1) (x2,y2) (w2,h2) =
 -- I am bad at geometry.
 circleAndRectangleOverlap :: (X, Y, Radius) -> (X, Y, Width, Height) -> Bool
 circleAndRectangleOverlap (x1,y1,r) (x2,y2,w,h) =
-    any (flip surrounds (x1,y1)) (map ((,)(Circle r)) [(x2,y2),(x2+w,y2),(x2,y2+h),(x2+w,y2+h)])
+    any (`surrounds` (x1,y1)) (map ((,)(Circle r)) [(x2,y2),(x2+w,y2),(x2,y2+h),(x2+w,y2+h)])
     ||
-    any (flip surrounds (x1,y1)) [(Rectangle (w+2*r) h, (x2-r,y2)), (Rectangle w (h+2*r), (x2, y2-r))]
+    any (`surrounds` (x1,y1)) [(Rectangle (w+2*r) h, (x2-r,y2)), (Rectangle w (h+2*r), (x2, y2-r))]
 
 overlap' :: (Location, Shape) -> (Location, Shape) -> Bool
 overlap' (loc1, shape1) (loc2, shape2)
@@ -430,8 +430,8 @@ addObj obj = do
     return objId
 
 authenticateGoals :: Game -> [(Player, (ObjId, Goal))] -> [(ObjId, Goal)]
-authenticateGoals game = map snd . (filter $ \(player, (objId, goal)) -> 
-    objId `elem` (M.findWithDefault [] player (game^.players)))
+authenticateGoals game = map snd . filter (\(player, (objId, goal)) -> 
+    objId `elem` M.findWithDefault [] player (game^.players))
 
 -- rewrite with monads, cleaner separation
 
