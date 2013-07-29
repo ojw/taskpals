@@ -56,7 +56,7 @@ data World = World
     , _worldTasks :: IntMap Task
     , _worldNextObj :: Int
     , _worldNextTask :: Int
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
 blankWorld :: World
 blankWorld = World I.empty I.empty 1 1
@@ -64,13 +64,13 @@ blankWorld = World I.empty I.empty 1 1
 data ObjIdentity = ObjIdentity
     { _objidentityName :: Text
     , _objidentityTags :: [Tag]
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
 data Obj = Obj
     { _objTask :: TaskSystem
     , _objSpace :: SpatialSystem
     , _objIdentity :: ObjIdentity
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
 data SpatialSystem = SpatialSystem
     { _spatialsystemLocation :: Location
@@ -78,19 +78,19 @@ data SpatialSystem = SpatialSystem
     , _spatialsystemSpeed :: Speed
     , _spatialsystemDestination :: Maybe Destination
     , _spatialsystemBlocking :: Bool
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
-data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Typeable)
+data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Typeable, Eq)
 
-data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show, Data, Typeable)
+data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show, Data, Typeable, Eq)
 
-data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show, Data, Typeable)-- -- | ToTask TaskId
+data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show, Data, Typeable, Eq)-- -- | ToTask TaskId
 
-data Goal = NoGoal | GoTo Destination | WorkOn TaskId deriving (Read, Show, Data, Typeable)
+data Goal = NoGoal | GoTo Destination | WorkOn TaskId deriving (Read, Show, Data, Typeable, Eq)
 
 data GoalPref = NeverAct | UseSkill SkillType | WorkOnType WorkType | GoalPrefs [GoalPref]
     | Target GoalPref
-    deriving (Read, Show, Data, Typeable)
+    deriving (Read, Show, Data, Typeable, Eq)
 
 data TaskSystem = TaskSystem
     { _tasksystemTasks :: [TaskId]
@@ -98,20 +98,20 @@ data TaskSystem = TaskSystem
     , _tasksystemWork :: Maybe Work
     , _tasksystemGoal :: Goal
     , _tasksystemGoalPref :: GoalPref
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
 data Work = Work
     { _workTask :: TaskId
     , _workComplete :: Double
     , _workTarget :: Maybe Target -- I think this is the safest place for target (obj whose work completes task picks target)
     , _workLevel :: Int -- is same as objs' skill level... duplication bad and hopefully temporary
-    } deriving (Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
 data Skill = Skill
     { _skillSkillType :: SkillType
     , _skillLevel :: Int
     , _skillSpeed :: Int
-    } deriving (Eq, Read, Show, Data, Typeable)
+    } deriving (Read, Show, Data, Typeable, Eq)
 
 data Task = Task
     { _taskName :: Text
@@ -122,14 +122,15 @@ data Task = Task
     , _taskWorkCompleted :: Int
     , _taskOwner :: ObjId
     , _taskOutcome :: [TaskEvent] -- World -> World -- ? or Task -> World -> World or something else
+    , _taskEnabled :: Bool
     , _taskVisibility :: Int -- Complete Examine task will reveal tasks w/ visibility <= Observation skill
-    }  deriving (Read, Show, Data, Typeable)
+    }  deriving (Read, Show, Data, Typeable, Eq)
 
 data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle Location Radius | InRectangle Location (Width, Height) {- | WithTag -}
- deriving (Read, Show, Data, Typeable)
+ deriving (Read, Show, Data, Typeable, Eq)
 
-data TaskEvent = ResetThisTask | RemoveThisTask | AddTask TaskId | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
- deriving (Read, Show, Data, Typeable)
+data TaskEvent = ResetThisTask | DisableThisTask | ActivateTask TaskId | RemoveThisTask | AddTask TaskId | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith Obj
+ deriving (Read, Show, Data, Typeable, Eq)
 
 makeFields ''ObjIdentity
 makeFields ''Command
@@ -194,6 +195,12 @@ _y = lens getY setY where
 
 -- Goal system
 
+startWorkOn :: TaskId -> ObjId -> World -> Maybe Work
+startWorkOn taskId objId world = do 
+    obj <- world^.objs.at objId
+    task <- world^.tasks.at taskId
+    return $ Work taskId 0 Nothing $ getSkill (task^.skill) obj ^. level
+
 -- This ignores distance, whether obj reasonably knows about aspects of the world, etc
 chooseGoal :: GoalPref -> World -> Maybe Goal
 chooseGoal NeverAct _ = Nothing
@@ -230,13 +237,15 @@ inTarget (InRectangle locatn (width, height)) targetter target world = maybe Fal
     
 
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
-runEvent taskId objId ResetThisTask world = world & tasks.at taskId.traversed.workCompleted .~ 0
-runEvent taskId objId RemoveThisTask world = removeTask taskId world
-runEvent taskId objId (AddTask taskId') world = world & objs.at objId.traversed.task.tasks <>~ [taskId']
-runEvent taskId objId (SetBlocking blocking') world = world & objs.at objId.traversed.space.blocking .~ blocking'
-runEvent taskId objId (CreateWork workType amount target) world = world 
-runEvent taskId objId RemoveThisObj world = world & objs %~ sans objId
-runEvent taskId objId (ReplaceThisObjWith obj') world = world & objs %~ I.insert objId obj'
+runEvent taskId objId ResetThisTask = tasks.at taskId.traversed.workCompleted .~ 0
+runEvent taskId objId DisableThisTask = tasks.at taskId.traversed.enabled .~ False
+runEvent taskId objId (ActivateTask taskId') = tasks.at taskId'.traversed.enabled .~ True
+runEvent taskId objId RemoveThisTask = removeTask taskId
+runEvent taskId objId (AddTask taskId') = objs.at objId.traversed.task.tasks <>~ [taskId']
+runEvent taskId objId (SetBlocking blocking') = objs.at objId.traversed.space.blocking .~ blocking'
+runEvent taskId objId (CreateWork workType amount target) = id 
+runEvent taskId objId RemoveThisObj = objs %~ sans objId
+runEvent taskId objId (ReplaceThisObjWith obj') = objs %~ I.insert objId obj'
 
 modObj :: (MonadState World m) => ObjId -> (Obj -> Obj) -> m () -- World -> World
 modObj objId f = modify $ objs %~ (I.adjust f objId)
@@ -357,7 +366,7 @@ workConstant :: Double
 workConstant = 1
 
 setGoal :: ObjId -> Goal -> World -> World
-setGoal objId goal' = objs.at objId.traversed.task.goal .~ goal'
+setGoal objId goal' = (objs.at objId.traversed.task.goal .~ goal')
 
 isWorkingOnTask :: Obj -> TaskId -> Bool
 isWorkingOnTask obj taskId = case (obj^.task.goal, obj^.task.work) of
@@ -369,15 +378,15 @@ getSkill skillType obj = fromMaybe (Skill skillType 0  0) (M.lookup skillType (v
 
 -- missing location check
 canWorkOn :: Obj -> Task -> Bool
-canWorkOn obj task = getSkill (task^.skill) obj ^. level >= task ^. difficulty 
+canWorkOn obj task = task^.enabled && getSkill (task^.skill) obj ^. level >= task ^. difficulty 
 
 workIsComplete :: Work -> Bool
 workIsComplete work = view complete work >= 100
 
 applyWork :: Work -> World -> World
-applyWork work world
-    | workIsComplete work = world & tasks.at (work^.task).traverse %~ \tsk -> tsk & workCompleted +~ (work^.level - tsk^.difficulty)
-    | otherwise           = world
+applyWork work world = world & tasks.at (work^.task).traverse %~ \tsk -> tsk & workCompleted +~ (work^.level - tsk^.difficulty)
+    {-| workIsComplete work = world & tasks.at (work^.task).traverse %~ \tsk -> tsk & workCompleted +~ 1 --(work^.level - tsk^.difficulty)-}
+    {-| otherwise           = world-}
 
 tickWork :: Time -> ObjId -> World -> World
 tickWork time objId world = case mWork of
@@ -387,8 +396,8 @@ tickWork time objId world = case mWork of
                         goal -> goal
     Just work' -> if workIsComplete work' 
         then applyWork work' $
-             world & objs.at objId.traversed.task.work .~ Nothing
-                   & objs.at objId.traversed.task.goal .~ NoGoal
+             world -- & objs.at objId.traversed.task.work .~ Nothing
+                   -- & objs.at objId.traversed.task.goal .~ NoGoal
         else world & objs.at objId.traversed.task.work .~ Just work'
   where
     mWork = do
