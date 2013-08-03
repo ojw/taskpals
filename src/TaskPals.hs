@@ -15,6 +15,7 @@ import qualified Data.Map as M
 import Data.Maybe
 import Control.Monad.State
 import Control.Monad.Reader
+import Control.Monad.Writer
 import Data.Data
 import Data.Aeson.TH
 import qualified Data.Char as Char
@@ -39,7 +40,6 @@ data SkillType = Labor | Combat | Medical | Mechanical | Chemical | Hacking | Ob
 data WorkType = Generic | Open | Close | Create | Break | Unlock | Hack | Fix | Heal | Barricade | Use
     deriving (Eq, Ord, Read, Show, Data, Typeable)
 
-data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show, Data, Typeable, Eq)
 
 data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show, Data, Typeable, Eq)-- -- | ToTask TaskId
 
@@ -51,25 +51,13 @@ data TaskEvent = ResetThisTask | DisableThisTask | ActivateTask TaskId | Disable
 
 -------------------------------------------------------------------------------
 
-data Skill = Skill
-    { _skillSkillType :: SkillType
-    , _skillLevel :: Int
-    , _skillSpeed :: Int
-    } deriving (Read, Show, Data, Typeable, Eq)
-
--------------------------------------------------------------------------------
-
 data Command = Command
     { _commandPlayer :: Player
     , _commandObjId :: ObjId
     , _commandGoal :: Goal
     }
 
-data GoalPref = NeverAct | UseSkill SkillType | WorkOnType WorkType | GoalPrefs [GoalPref]
-    | Target GoalPref
-    deriving (Read, Show, Data, Typeable, Eq)
-
-data Goal = GoTo Destination | WorkOn TaskId deriving (Read, Show, Data, Typeable, Eq)
+-------------------------------------------------------------------------------
 
 data WorkComponent = WorkComponent
     { _worksystemGoalPref :: GoalPref
@@ -78,31 +66,36 @@ data WorkComponent = WorkComponent
     , _worksystemSkills :: [Skill]
     } deriving (Read, Show, Eq)
 
+data GoalPref = NeverAct | UseSkill SkillType | WorkOnType WorkType | GoalPrefs [GoalPref]
+    | Target GoalPref
+    deriving (Read, Show, Data, Typeable, Eq)
+
+data Goal = GoTo Destination | WorkOn TaskId deriving (Read, Show, Data, Typeable, Eq)
+
 data Work = Work
     { _workTask :: TaskId
     , _workComplete :: Double
     , _workTarget :: Maybe Target
     } deriving (Read, Show, Data, Typeable, Eq)
 
+data Skill = Skill
+    { _skillSkillType :: SkillType
+    , _skillLevel :: Int
+    , _skillSpeed :: Int
+    } deriving (Read, Show, Data, Typeable, Eq)
+
+type TaskComponent = IntMap Task
+
 data Task = Task
-    { _taskTaskId :: TaskId
-    , _taskOwner :: ObjId
-    , _taskName :: Text
+    { _taskName :: Text
     , _taskWorkType :: WorkType
     , _taskSkill :: SkillType
     , _taskDifficulty :: Int
     , _taskWorkRequired :: Int
     , _taskWorkCompleted :: Int
-    , _taskOutcome :: [TaskEvent] -- World -> World -- ? or Task -> World -> World or something else
+    , _taskOutcome :: [TaskEvent]
     , _taskEnabled :: Bool
     }  deriving (Read, Show, Eq)
-
-data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Typeable, Eq)
-
-data MetaComponent = MetaComponent
-    { _objidentityName :: Text
-    , _objidentityTags :: [Tag]
-    } deriving (Read, Show, Data, Typeable, Eq)
 
 data PhysicsComponent = PhysicsComponent
     { _physicsLocation :: Location
@@ -111,7 +104,18 @@ data PhysicsComponent = PhysicsComponent
     , _physicsBlocking :: Bool
     } deriving (Read, Show, Data, Typeable, Eq)
 
-type TaskComponent = IntMap Task
+data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Typeable, Eq)
+
+data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show, Data, Typeable, Eq)
+
+data MetaComponent = MetaComponent
+    { _objidentityName :: Text
+    , _objidentityTags :: [Tag]
+    } deriving (Read, Show, Data, Typeable, Eq)
+
+data Component = CompWork WorkComponent | CompTasks TaskComponent | CompPhysics PhysicsComponent | CompMeta MetaComponent
+
+type Obj = [Component]
 
 data World = World
     { _worldNextObj :: ObjId
@@ -172,10 +176,9 @@ deriveJSON (dropWhile (not . Char.isUpper)) ''WorkComponent
 tick :: Time -> [Command] -> State World ()
 tick time commands = do
     world <- get
-    zoom work $ addCommandsM commands
-    (fin, dest) <- zoom work $ tickWorksM world
-    events <- zoom tasks $ tickTasksM world fin
-    zoom physics $ tickPhysicsM time world dest
+    (fin, dest) <- zoom work    $ addCommandsM commands >> tickWorksM world
+    events      <- zoom tasks   $ tickTasksM fin
+    _           <- zoom physics $ tickPhysicsM time world dest
     runEventsM events
 
 -- Ignoring player / obj validation for now
@@ -190,16 +193,16 @@ addCommandsM commands = modify $ addCommands commands
 
 -- Skipping GoalPrefs for now
 
-workOn :: ObjId -> Task -> WorkComponent -> (WorkComponent, Maybe (Int, ObjId, TaskId))
-workOn objId task system = if task^.enabled
+workOn :: ObjId -> TaskId -> Task -> WorkComponent -> (WorkComponent, Maybe (Int, ObjId, TaskId))
+workOn objId taskId task system = if task^.enabled
     then if canWorkOn task system
             then if isComplete work' 
-                    then (system & work .~ Nothing, Just ((releventSkillFor task system)^.level, objId, task^.taskId))
+                    then (system & work .~ Nothing, Just ((releventSkillFor task system)^.level, objId, taskId))
                     else (system & work .~ Just work', Nothing)
             else (system & work .~ Nothing, Nothing)
     else (system & work .~ Nothing & goal .~ Nothing, Nothing)
       where
-        work' = maybe (Work (task^.taskId) 0 Nothing) (complete+~1) (system^.work)
+        work' = maybe (Work (taskId) 0 Nothing) (complete+~1) (system^.work)
         -- Stupidly uses first relevent skill it encounters.
         canWorkOn :: Task -> WorkComponent -> Bool
         canWorkOn task system = task^.difficulty < (releventSkillFor task system)^.level
@@ -217,7 +220,7 @@ tickWork world objId wc = case wc^.goal of
     Just (WorkOn (taskObj, taskId)) -> (wc',                 (done,    dest))
       where
         (wc', done) = case world^?tasks.at taskObj.traversed.at taskId.traversed of
-            Just task -> workOn objId task wc
+            Just task -> workOn objId (taskObj, taskId) task wc
             Nothing -> (wc & goal .~ Nothing & work .~ Nothing, Nothing)
         dest = Just $ ToObj taskObj
 
@@ -235,29 +238,29 @@ tickWorksM world = do
     put wc'
     return (fin, dest)
 
-tickTasksM :: MonadState (IntMap TaskComponent) m => World -> [(Int, ObjId, TaskId)] -> m [(TaskId, ObjId, TaskEvent)]
-tickTasksM world newWork = do
+tickTasksM :: MonadState (IntMap TaskComponent) m => [(Int, ObjId, TaskId)] -> m [(TaskId, ObjId, TaskEvent)]
+tickTasksM newWork = do
     tcs <- get
-    let (tcs', events) = tickTasks world newWork tcs
+    let (tcs', events) = tickTasks newWork tcs
     put tcs'
     return events
             
-tickTasks :: World -> [(Int, ObjId, TaskId)] -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
-tickTasks world newWork tcs = foldr f (tcs, []) newWork
+tickTasks :: [(Int, ObjId, TaskId)] -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
+tickTasks newWork tcs = foldr f (tcs, []) newWork
   where
-    f work (tcs, events) = let (tcs', events') = tickTask' world work tcs in (tcs', events' ++ events)
+    f work (tcs, events) = let (tcs', events') = tickTask' work tcs in (tcs', events' ++ events)
 
-tickTask' :: World -> (Int, ObjId, TaskId) -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
-tickTask' world (newWork, worker, taskId) tcs = case tcs^.at (fst taskId) of -- .traversed.at (snd taskId) of
+tickTask' :: (Int, ObjId, TaskId) -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
+tickTask' (newWork, worker, taskId) tcs = case tcs^.at (fst taskId) of -- .traversed.at (snd taskId) of
     Nothing -> (tcs, [])
     Just tasks -> case tasks^.at (snd taskId) of
         Nothing -> (tcs, [])
-        Just task -> case tickTask world worker taskId task newWork of
+        Just task -> case tickTask worker taskId task newWork of
             (task', mEvents) -> (tcs & I.adjust (I.insert (snd taskId) task') (fst taskId), join $ maybeToList mEvents)
 
 -- the Int is completed work to add to task completion
-tickTask :: World -> ObjId -> TaskId -> Task -> Int -> (Task, Maybe [(TaskId, ObjId, TaskEvent)])
-tickTask world objId taskId task newWork = addWorkToTask task newWork
+tickTask :: ObjId -> TaskId -> Task -> Int -> (Task, Maybe [(TaskId, ObjId, TaskEvent)])
+tickTask objId taskId task newWork = addWorkToTask task newWork
   where
     addWorkToTask :: Task -> Int -> (Task, Maybe [(TaskId, ObjId, TaskEvent)])
     addWorkToTask task work = if work > task^.difficulty 
