@@ -99,30 +99,32 @@ data Task = Task
 
 data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Typeable, Eq)
 
-data ObjMeta = ObjMeta
+data MetaComponent = MetaComponent
     { _objidentityName :: Text
     , _objidentityTags :: [Tag]
     } deriving (Read, Show, Data, Typeable, Eq)
 
-data Physics = Physics
+data PhysicsComponent = PhysicsComponent
     { _physicsLocation :: Location
     , _physicsShape :: Shape
     , _physicsSpeed :: Speed
     , _physicsBlocking :: Bool
     } deriving (Read, Show, Data, Typeable, Eq)
 
+type TaskComponent = IntMap Task
+
 data World = World
     { _worldNextObj :: ObjId
     , _worldTime :: Time
     , _worldWork :: IntMap WorkComponent
-    , _worldTasks :: IntMap (IntMap Task)
-    , _worldPhysics :: IntMap Physics
-    , _worldObjMetas :: IntMap ObjMeta
+    , _worldTasks :: IntMap TaskComponent
+    , _worldPhysics :: IntMap PhysicsComponent
+    , _worldMeta :: IntMap MetaComponent
     } deriving (Read, Show, Eq)
 
-makeFields ''ObjMeta
+makeFields ''MetaComponent
 makeFields ''Command
-makeFields ''Physics
+makeFields ''PhysicsComponent
 makeFields ''Work
 makeFields ''Skill
 makeFields ''Task 
@@ -156,8 +158,8 @@ deriveJSON (dropWhile (not . Char.isUpper)) ''Destination
 deriveJSON (dropWhile (not . Char.isUpper)) ''Goal
 deriveJSON (dropWhile (not . Char.isUpper)) ''World
 deriveJSON (dropWhile (not . Char.isUpper)) ''Task
-deriveJSON (dropWhile (not . Char.isUpper)) ''Physics
-deriveJSON (dropWhile (not . Char.isUpper)) ''ObjMeta
+deriveJSON (dropWhile (not . Char.isUpper)) ''PhysicsComponent
+deriveJSON (dropWhile (not . Char.isUpper)) ''MetaComponent
 deriveJSON (dropWhile (not . Char.isUpper)) ''TaskEvent
 deriveJSON (dropWhile (not . Char.isUpper)) ''Shape
 deriveJSON (dropWhile (not . Char.isUpper)) ''GoalPref
@@ -165,20 +167,34 @@ deriveJSON (dropWhile (not . Char.isUpper)) ''Target
 deriveJSON (dropWhile (not . Char.isUpper)) ''Work
 deriveJSON (dropWhile (not . Char.isUpper)) ''WorkComponent
 
--- Ignoring player / obj validation for now
-addCommand :: Command -> IntMap Goal -> IntMap Goal
-addCommand (Command _ objId goal) goals = I.insert objId goal goals
+-- Engine
 
-addCommands :: [Command] -> IntMap Goal -> IntMap Goal
-addCommands commands goals = foldr addCommand goals commands
+tick :: Time -> [Command] -> State World ()
+tick time commands = do
+    world <- get
+    zoom work $ addCommandsM commands
+    (fin, dest) <- zoom work $ tickWorksM world
+    events <- zoom tasks $ tickTasksM world fin
+    zoom physics $ tickPhysicsM time world dest
+    runEventsM events
+
+-- Ignoring player / obj validation for now
+
+addCommands :: [Command] -> IntMap WorkComponent -> IntMap WorkComponent
+addCommands commands wcs = foldr addCommand wcs commands
+  where
+    addCommand (Command _ objId goal') = at objId .traversed.goal .~ Just goal'
+
+addCommandsM :: MonadState (IntMap WorkComponent) m => [Command] -> m ()
+addCommandsM commands = modify $ addCommands commands
 
 -- Skipping GoalPrefs for now
 
-workOn :: Task -> WorkComponent -> (WorkComponent, Maybe (Int, TaskId))
-workOn task system = if task^.enabled
+workOn :: ObjId -> Task -> WorkComponent -> (WorkComponent, Maybe (Int, ObjId, TaskId))
+workOn objId task system = if task^.enabled
     then if canWorkOn task system
             then if isComplete work' 
-                    then (system & work .~ Nothing, Just ((releventSkillFor task system)^.level, task^.taskId))
+                    then (system & work .~ Nothing, Just ((releventSkillFor task system)^.level, objId, task^.taskId))
                     else (system & work .~ Just work', Nothing)
             else (system & work .~ Nothing, Nothing)
     else (system & work .~ Nothing & goal .~ Nothing, Nothing)
@@ -194,33 +210,68 @@ workOn task system = if task^.enabled
         isComplete :: Work -> Bool
         isComplete work = work^.complete >= 100
 
-tickWork :: World -> ObjId -> WorkComponent -> (WorkComponent, (Maybe (Int, TaskId), Maybe Destination))
-tickWork world objId ws = case ws^.goal of
-    Nothing                         -> (ws & work.~ Nothing, (Nothing, Nothing))
-    Just (GoTo destination)         -> (ws,                  (Nothing, Just destination))
-    Just (WorkOn (taskObj, taskId)) -> (ws',                 (done,    dest))
+tickWork :: World -> ObjId -> WorkComponent -> (WorkComponent, (Maybe (Int, ObjId, TaskId), Maybe Destination))
+tickWork world objId wc = case wc^.goal of
+    Nothing                         -> (wc & work.~ Nothing, (Nothing, Nothing))
+    Just (GoTo destination)         -> (wc & work.~ Nothing, (Nothing, Just destination))
+    Just (WorkOn (taskObj, taskId)) -> (wc',                 (done,    dest))
       where
-        (ws', done) = case world^?tasks.at taskObj.traversed.at taskId.traversed of
-            Just task -> workOn task ws
-            Nothing -> (ws, Nothing)
+        (wc', done) = case world^?tasks.at taskObj.traversed.at taskId.traversed of
+            Just task -> workOn objId task wc
+            Nothing -> (wc & goal .~ Nothing & work .~ Nothing, Nothing)
         dest = Just $ ToObj taskObj
 
-addWorkToTask :: Task -> Int -> (Task, Maybe [TaskEvent])
-addWorkToTask task work = if work > task^.difficulty 
-    then if task'^.workCompleted >= task'^.workRequired
-            then (task', Just $ task'^.outcome)
-            else (task', Nothing)
-    else (task, Nothing)
+tickWorks :: World -> IntMap WorkComponent -> (IntMap WorkComponent, [(Int, ObjId, TaskId)], [(ObjId, Destination)])
+tickWorks world wcs = I.foldrWithKey f (wcs, [], []) wcs
   where
-    task' = task & workCompleted +~ (work - task^.difficulty)
-        
+    f objId wc (workComponents, finishedWork, destinations) =
+        let (wc', (fin, dest)) = tickWork world objId wc in
+            (I.insert objId wc' workComponents, maybeToList fin ++ finishedWork, maybeToList (fmap ((,) objId) dest) ++ destinations)
+
+tickWorksM :: MonadState (IntMap WorkComponent) m => World -> m ([(Int, ObjId, TaskId)], [(ObjId, Destination)])
+tickWorksM world = do
+    wcs <- get
+    let (wc', fin, dest) = tickWorks world wcs
+    put wc'
+    return (fin, dest)
+
+tickTasksM :: MonadState (IntMap TaskComponent) m => World -> [(Int, ObjId, TaskId)] -> m [(TaskId, ObjId, TaskEvent)]
+tickTasksM world newWork = do
+    tcs <- get
+    let (tcs', events) = tickTasks world newWork tcs
+    put tcs'
+    return events
+            
+tickTasks :: World -> [(Int, ObjId, TaskId)] -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
+tickTasks world newWork tcs = foldr f (tcs, []) newWork
+  where
+    f work (tcs, events) = let (tcs', events') = tickTask' world work tcs in (tcs', events' ++ events)
+
+tickTask' :: World -> (Int, ObjId, TaskId) -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
+tickTask' world (newWork, worker, taskId) tcs = case tcs^.at (fst taskId) of -- .traversed.at (snd taskId) of
+    Nothing -> (tcs, [])
+    Just tasks -> case tasks^.at (snd taskId) of
+        Nothing -> (tcs, [])
+        Just task -> case tickTask world worker taskId task newWork of
+            (task', mEvents) -> (tcs & I.adjust (I.insert (snd taskId) task') (fst taskId), join $ maybeToList mEvents)
+
 -- the Int is completed work to add to task completion
-tickTask :: World -> ObjId -> Task -> Int -> (Task, Maybe [TaskEvent])
-tickTask world objId task newWork = addWorkToTask task newWork
+tickTask :: World -> ObjId -> TaskId -> Task -> Int -> (Task, Maybe [(TaskId, ObjId, TaskEvent)])
+tickTask world objId taskId task newWork = addWorkToTask task newWork
+  where
+    addWorkToTask :: Task -> Int -> (Task, Maybe [(TaskId, ObjId, TaskEvent)])
+    addWorkToTask task work = if work > task^.difficulty 
+        then if task'^.workCompleted >= task'^.workRequired
+                then (task', Just $ map ((,,) taskId objId) $ task'^.outcome)
+                else (task', Nothing)
+        else (task, Nothing)
+      where
+        task' = task & workCompleted +~ (work - task^.difficulty)
+        
 
--- Physics
+-- PhysicsComponent
 
-overlap :: Physics -> Physics -> Bool
+overlap :: PhysicsComponent -> PhysicsComponent -> Bool
 overlap phys1 phys2 = inSameSpace loc1 loc2 && 
         case (shape1, shape2) of
             (Circle r1, Circle r2) -> 
@@ -245,13 +296,13 @@ overlap phys1 phys2 = inSameSpace loc1 loc2 &&
         any (`surrounds` (x1,y1)) (map ((,)(Circle r)) [(x2,y2),(x2+w,y2),(x2,y2+h),(x2+w,y2+h)]) ||
         any (`surrounds` (x1,y1)) [(Rectangle (w+2*r) h, (x2-r,y2)), (Rectangle w (h+2*r), (x2, y2-r))]
 
-collide :: Physics -> Physics -> Bool
+collide :: PhysicsComponent -> PhysicsComponent -> Bool
 collide phys1 phys2 = overlap phys1 phys2 && phys1^.blocking && phys2^.blocking
 
 speedConstant :: Double
 speedConstant = 1
 
-moveBy :: (X,Y) -> Physics -> Physics
+moveBy :: (X,Y) -> PhysicsComponent -> PhysicsComponent
 moveBy (x,y) phys = case phys^.location of
     OnMap (x1,y1) -> phys & location .~ OnMap (x+x1, y+y1)
     InObj objId (x1,y1) -> phys & location .~ InObj objId (x+x1, y+y1)
@@ -261,7 +312,7 @@ inSameSpace (OnMap (x1,y1)) (OnMap (x2,y2)) = True
 inSameSpace (InObj obj1 (x1,y1)) (InObj obj2 (x2,y2)) = obj1 == obj2
 inSameSpace _  _ = False
 
-coordinates :: Physics -> (X,Y)
+coordinates :: PhysicsComponent -> (X,Y)
 coordinates phys = case phys^.location of
     OnMap (x,y) -> (x,y)
     InObj _ (x,y) -> (x,y)
@@ -270,10 +321,10 @@ surrounds :: (Shape, Point) -> Point -> Bool
 surrounds (Rectangle w h, (x,y)) (x',y') = x <= x' && x' <= x+w && y <= y' && y' <= y+h
 surrounds (Circle r, (x,y)) (x',y') = (x-x')^^2 + (y-y')^^2 <= r^^2
 
-collidesWithAny :: Physics -> World -> Bool
+collidesWithAny :: PhysicsComponent -> World -> Bool
 collidesWithAny obj world = I.null $ I.filter (collide obj) (world ^. physics)
 
-nextStep :: Time -> World -> Physics -> Destination -> Maybe (X,Y)
+nextStep :: Time -> World -> PhysicsComponent -> Destination -> Maybe (X,Y)
 nextStep time world phys destination = case destinationCoordinates world destination of
     Nothing -> Nothing
     Just (x2,y2) -> let x1 = phys^.location._x
@@ -286,12 +337,20 @@ nextStep time world phys destination = case destinationCoordinates world destina
             Nothing -> Nothing
             Just phys -> Just (phys^.location._x, phys^.location._y)
 
-moveObj :: Time -> World -> Destination -> Physics -> Physics
+moveObj :: Time -> World -> Destination -> PhysicsComponent -> PhysicsComponent
 moveObj time world destination phys = case nextStep time world phys destination of
     Nothing -> phys -- blocking shouldn't cause obj to give up on movement -- space.destination .~ Nothing $ obj
     Just (x,y) -> if collidesWithAny phys' world then phys else phys'
       where
         phys' = moveBy (x,y) phys
+
+tickPhysics :: Time -> World -> [(ObjId, Destination)] -> IntMap PhysicsComponent -> IntMap PhysicsComponent
+tickPhysics time world destinations pcs = foldr f pcs destinations
+  where
+    f (objId, destination) = at objId.traversed %~ moveObj time world destination
+
+tickPhysicsM :: MonadState (IntMap PhysicsComponent) m => Time -> World -> [(ObjId, Destination)] -> m ()
+tickPhysicsM time world destinations = modify $ tickPhysics time world destinations
 
 {--- Event system-}
 
@@ -302,14 +361,21 @@ inTarget (AtObj targetId) targetter target world = targetId == target
 inTarget (WithinRadius radius) targetter target world = maybe False (uncurry overlap) $ do
     targetterLocation <- world^?physics.at targetter.traversed.location
     targetPhysics <- world^.physics.at target
-    return (Physics targetterLocation (Circle radius) 0 False, targetPhysics)
+    return (PhysicsComponent targetterLocation (Circle radius) 0 False, targetPhysics)
 inTarget (InCircle locatn radius) targetter target world = maybe False (uncurry overlap) $ do
     targetPhysics <- world^.physics.at target
-    return (Physics locatn (Circle radius) 0 False, targetPhysics)
+    return (PhysicsComponent locatn (Circle radius) 0 False, targetPhysics)
 inTarget (InRectangle locatn (width, height)) targetter target world = maybe False (uncurry overlap) $ do
     targetPhysics <- world^.physics.at target
-    return (Physics locatn (Rectangle width height) 0 False, targetPhysics)
+    return (PhysicsComponent locatn (Rectangle width height) 0 False, targetPhysics)
     
+runEvents :: [(TaskId, ObjId, TaskEvent)] -> World -> World
+runEvents events world = foldr f world events
+  where
+    f (taskId, objId, taskEvent) = runEvent taskId objId taskEvent
+
+runEventsM :: MonadState World m => [(TaskId, ObjId, TaskEvent)] -> m ()
+runEventsM events = modify $ runEvents events
 
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
 runEvent taskId objId ResetThisTask = tasks.at (fst taskId).traversed.at (snd taskId).traversed.workCompleted .~ 0
