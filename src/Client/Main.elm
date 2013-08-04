@@ -8,11 +8,11 @@ import Dict
 import List
 import JavaScript.Experimental
 
--- import Serialize
+zoom = 3
 
 renderShapeAt shape (x,y) c = case shape of
-    (Circle radius) -> circle radius |> filled c |> move (x,y)
-    (Rectangle w h) -> rect w h |> filled c |> move (x,y)
+    (Circle radius) -> circle (zoom * radius) |> filled c |> move (zoom * x, zoom * y)
+    (Rectangle w h) -> rect (zoom * w) (zoom * h) |> filled c |> move (zoom * x,zoom * y)
 
 renderPhys phys = case phys.location of
     (OnMap x y) -> Just <| renderShapeAt phys.shape (x,y) (if phys.blocking then red else blue)
