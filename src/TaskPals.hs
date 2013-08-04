@@ -46,7 +46,7 @@ data Destination = ToMap (X,Y) | ToObj ObjId  deriving (Read, Show, Data, Typeab
 data Target = None | Self | AtObj ObjId | WithinRadius Radius | InCircle Location Radius | InRectangle Location (Width, Height) {- | WithTag -}
  deriving (Read, Show, Data, Typeable, Eq)
 
-data TaskEvent = ResetThisTask | DisableThisTask | ActivateTask TaskId | DisableTask TaskId | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith ObjId
+data TaskEvent = ResetThisTask | DisableThisTask | EnableTask TaskId | DisableTask TaskId | SetBlocking Bool | CreateWork WorkType Int Target | RemoveThisObj | ReplaceThisObjWith ObjId | RemoveWorkFrom TaskId Int
  deriving (Read, Show, Data, Typeable, Eq)
 
 -------------------------------------------------------------------------------
@@ -115,11 +115,10 @@ data MetaComponent = MetaComponent
 
 data Component = CompWork WorkComponent | CompTasks TaskComponent | CompPhysics PhysicsComponent | CompMeta MetaComponent
 
-type Obj = [Component]
+type Obj = ObjId -> [Component]
 
 data World = World
     { _worldNextObj :: ObjId
-    , _worldTime :: Time
     , _worldWork :: IntMap WorkComponent
     , _worldTasks :: IntMap TaskComponent
     , _worldPhysics :: IntMap PhysicsComponent
@@ -160,7 +159,6 @@ deriveJSON (dropWhile (not . Char.isUpper)) ''Command
 deriveJSON (dropWhile (not . Char.isUpper)) ''Location
 deriveJSON (dropWhile (not . Char.isUpper)) ''Destination
 deriveJSON (dropWhile (not . Char.isUpper)) ''Goal
-deriveJSON (dropWhile (not . Char.isUpper)) ''World
 deriveJSON (dropWhile (not . Char.isUpper)) ''Task
 deriveJSON (dropWhile (not . Char.isUpper)) ''PhysicsComponent
 deriveJSON (dropWhile (not . Char.isUpper)) ''MetaComponent
@@ -170,13 +168,14 @@ deriveJSON (dropWhile (not . Char.isUpper)) ''GoalPref
 deriveJSON (dropWhile (not . Char.isUpper)) ''Target
 deriveJSON (dropWhile (not . Char.isUpper)) ''Work
 deriveJSON (dropWhile (not . Char.isUpper)) ''WorkComponent
+deriveJSON (dropWhile (not . Char.isUpper)) ''World
 
 -- Engine
 
 tick :: Time -> [Command] -> State World ()
 tick time commands = do
     world <- get
-    (fin, dest) <- zoom work    $ addCommandsM commands >> tickWorksM world
+    (fin, dest) <- zoom work    $ addCommandsM commands >> tickWorksM time world
     events      <- zoom tasks   $ tickTasksM fin
     _           <- zoom physics $ tickPhysicsM time world dest
     runEventsM events
@@ -193,8 +192,12 @@ addCommandsM commands = modify $ addCommands commands
 
 -- Skipping GoalPrefs for now
 
-workOn :: ObjId -> TaskId -> Task -> WorkComponent -> (WorkComponent, Maybe (Int, ObjId, TaskId))
-workOn objId taskId task system = if task^.enabled
+workConstant :: Double
+workConstant = 1/100000
+workToFinish = 10
+
+workOn :: Time -> ObjId -> TaskId -> Task -> WorkComponent -> (WorkComponent, Maybe (Int, ObjId, TaskId))
+workOn time objId taskId task system = if task^.enabled
     then if canWorkOn task system
             then if isComplete work' 
                     then (system & work .~ Nothing, Just ((releventSkillFor task system)^.level, objId, taskId))
@@ -202,7 +205,8 @@ workOn objId taskId task system = if task^.enabled
             else (system & work .~ Nothing, Nothing)
     else (system & work .~ Nothing & goal .~ Nothing, Nothing)
       where
-        work' = maybe (Work (taskId) 0 Nothing) (complete+~1) (system^.work)
+        spd = fromIntegral $ (releventSkillFor task system)^.speed
+        work' = maybe (Work (taskId) 0 Nothing) (complete+~(workConstant * time * spd)) (system^.work)
         -- Stupidly uses first relevent skill it encounters.
         canWorkOn :: Task -> WorkComponent -> Bool
         canWorkOn task system = task^.difficulty < (releventSkillFor task system)^.level
@@ -211,30 +215,30 @@ workOn objId taskId task system = if task^.enabled
             [] -> Skill (task^.skill) 0 0
             (sk:sks) -> sk
         isComplete :: Work -> Bool
-        isComplete work = work^.complete >= 100
+        isComplete work = work^.complete >= workToFinish
 
-tickWork :: World -> ObjId -> WorkComponent -> (WorkComponent, (Maybe (Int, ObjId, TaskId), Maybe Destination))
-tickWork world objId wc = case wc^.goal of
+tickWork :: Time -> World -> ObjId -> WorkComponent -> (WorkComponent, (Maybe (Int, ObjId, TaskId), Maybe Destination))
+tickWork time world objId wc = case wc^.goal of
     Nothing                         -> (wc & work.~ Nothing, (Nothing, Nothing))
     Just (GoTo destination)         -> (wc & work.~ Nothing, (Nothing, Just destination))
     Just (WorkOn (taskObj, taskId)) -> (wc',                 (done,    dest))
       where
         (wc', done) = case world^?tasks.at taskObj.traversed.at taskId.traversed of
-            Just task -> workOn objId (taskObj, taskId) task wc
+            Just task -> workOn time objId (taskObj, taskId) task wc
             Nothing -> (wc & goal .~ Nothing & work .~ Nothing, Nothing)
         dest = Just $ ToObj taskObj
 
-tickWorks :: World -> IntMap WorkComponent -> (IntMap WorkComponent, [(Int, ObjId, TaskId)], [(ObjId, Destination)])
-tickWorks world wcs = I.foldrWithKey f (wcs, [], []) wcs
+tickWorks :: Time -> World -> IntMap WorkComponent -> (IntMap WorkComponent, [(Int, ObjId, TaskId)], [(ObjId, Destination)])
+tickWorks time world wcs = I.foldrWithKey f (wcs, [], []) wcs
   where
     f objId wc (workComponents, finishedWork, destinations) =
-        let (wc', (fin, dest)) = tickWork world objId wc in
+        let (wc', (fin, dest)) = tickWork time world objId wc in
             (I.insert objId wc' workComponents, maybeToList fin ++ finishedWork, maybeToList (fmap ((,) objId) dest) ++ destinations)
 
-tickWorksM :: MonadState (IntMap WorkComponent) m => World -> m ([(Int, ObjId, TaskId)], [(ObjId, Destination)])
-tickWorksM world = do
+tickWorksM :: MonadState (IntMap WorkComponent) m => Time -> World -> m ([(Int, ObjId, TaskId)], [(ObjId, Destination)])
+tickWorksM time world = do
     wcs <- get
-    let (wc', fin, dest) = tickWorks world wcs
+    let (wc', fin, dest) = tickWorks time world wcs
     put wc'
     return (fin, dest)
 
@@ -303,7 +307,7 @@ collide :: PhysicsComponent -> PhysicsComponent -> Bool
 collide phys1 phys2 = overlap phys1 phys2 && phys1^.blocking && phys2^.blocking
 
 speedConstant :: Double
-speedConstant = 1
+speedConstant = 0.00001
 
 moveBy :: (X,Y) -> PhysicsComponent -> PhysicsComponent
 moveBy (x,y) phys = case phys^.location of
@@ -332,9 +336,11 @@ nextStep time world phys destination = case destinationCoordinates world destina
     Nothing -> Nothing
     Just (x2,y2) -> let x1 = phys^.location._x
                         y1 = phys^.location._y
-                        hyp = (x2-x1)^^2 + (y2-y1)^^2
+                        hyp = sqrt $ (x2-x1)^^2 + (y2-y1)^^2
                         s = phys^.speed in
-                    Just (time/1000 * s * (x2-x1)/hyp, speedConstant * time * s * (y2-y1)/hyp)
+                    if hyp < speedConstant * time * s then Nothing else
+                    Just (speedConstant * time * s * (x2-x1)/hyp, 
+                          speedConstant * time * s * (y2-y1)/hyp)
   where destinationCoordinates world (ToMap (x,y)) = Just (x, y)
         destinationCoordinates world (ToObj objId) = case world^.physics.at objId of
             Nothing -> Nothing
@@ -383,9 +389,11 @@ runEventsM events = modify $ runEvents events
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
 runEvent taskId objId ResetThisTask = tasks.at (fst taskId).traversed.at (snd taskId).traversed.workCompleted .~ 0
 runEvent taskId objId DisableThisTask = tasks.at (fst taskId).traversed.at (snd taskId).traversed.enabled .~ False
-runEvent taskId objId (ActivateTask taskId') = tasks.at (fst taskId').traversed.at (snd taskId').traversed.enabled .~ True
+runEvent taskId objId (EnableTask taskId') = tasks.at (fst taskId').traversed.at (snd taskId').traversed.enabled .~ True
 runEvent taskId objId (DisableTask taskId') = tasks.at (fst taskId').traversed.at (snd taskId').traversed.enabled .~ False
-runEvent taskId objId (SetBlocking blocking') = physics.at objId.traversed.blocking .~ blocking'
+runEvent taskId objId (SetBlocking blocking') = physics.at (fst taskId).traversed.blocking .~ blocking'
 runEvent taskId objId (CreateWork workType amount target) = id 
+runEvent taskId objId (RemoveWorkFrom taskId' amount) = id 
+runEvent _ _ _ = id
 -- runEvent taskId objId RemoveThisObj = removeObj objId
 -- runEvent taskId objId (ReplaceThisObjWith obj') = objs %~ I.insert objId obj' 
