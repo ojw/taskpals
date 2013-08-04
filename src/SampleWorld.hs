@@ -3,60 +3,61 @@
 module SampleWorld where
 
 import Control.Lens
-import TaskPals
 import Control.Monad.State as State
+import qualified Data.Aeson as A
+import qualified Data.ByteString.Lazy.Char8 as B
 import qualified Data.Map as M
 import qualified Data.Text as T
+import qualified Data.IntMap as I
 
-obj :: Obj
-obj = Obj (TaskSystem [] M.empty Nothing NoGoal NeverAct) (SpatialSystem (OnMap (0,0)) (Circle 10) 10 Nothing True) (ObjIdentity "" [])
+import TaskPals
 
-{-task :: Task-}
-{-task = Task "" Generic Labor 1 1 0 0 [] 0-}
+addComponent :: ObjId -> Component -> World -> World
+addComponent objId component = case component of
+    CompWork w -> work %~ I.insert objId w
+    CompTasks t -> tasks %~ I.insert objId t
+    CompPhysics p -> physics %~ I.insert objId p
+    CompMeta m -> meta %~ I.insert objId m
 
-open :: Task
-open = Task "Open" Open Labor 1 5 0 0 [ResetThisTask, DisableThisTask, ActivateTask 0, SetBlocking False] True 0
+addObj :: Obj -> World -> World
+addObj obj world = let objId = world^.nextObj in
+    nextObj %~ succ $ foldr (addComponent $ objId) world (obj objId)
 
-close :: Task
-close = Task "Close" Close Labor 1 5 0 0 [ResetThisTask, DisableThisTask, ActivateTask 0, SetBlocking True] False 0
+addObjs :: [Obj] -> World -> World
+addObjs objs world = foldr addObj world objs
 
-breakObj :: Task
-breakObj = Task "Break" Break Labor 2 10 0 0 [RemoveThisObj] True 0
+door :: Obj
+door objId = 
+    [ CompPhysics $ PhysicsComponent (OnMap (0,40)) (Rectangle 10 3) 0 True
+    , CompTasks $ I.fromList [ (1, Task "Open" Open Labor 0 2 0 [EnableTask (objId, 2), ResetThisTask, DisableThisTask, SetBlocking False] True)
+                             , (2, Task "Close" Close Labor 0 2 0 [EnableTask (objId, 1), DisableThisTask, SetBlocking True] False)
+                             , (3, Task "Break" Break Labor 2 5 0 [] True)
+                             ]
+    , CompMeta $ MetaComponent "Door" []
+    ]
 
-hardBreak :: Task
-hardBreak = breakObj & difficulty .~ 3 & workRequired .~ 20
+james :: Obj
+james objId =
+    [ CompPhysics $ PhysicsComponent (OnMap (0,0)) (Circle 3) 1 True
+    , CompTasks $ I.fromList [ (1, Task "Kill" Break Combat 0 10 0 [RemoveThisObj] True)
+                             , (2, Task "Heal" Fix Medical 0 1 0 [ResetThisTask, RemoveWorkFrom (objId, 1) 1] True)
+                             ]
+    , CompWork $ WorkComponent NeverAct (Just $ WorkOn (2,1)) Nothing [(Skill Labor 1 1)]
+    -- , CompWork $ WorkComponent NeverAct (Just $ GoTo (ToMap (2,2))) Nothing [(Skill Labor 1 1)]
+    , CompMeta $ MetaComponent "James" ["pal"]
+    ]
 
-door :: (MonadState World m) => m (TaskId, TaskId, TaskId, ObjId)
-door = do
-    openId <- addTask open
-    closeId <- addTask close
-    breakId <- addTask breakObj
-    modTask openId (outcome.traversed %~ (\oc -> case oc of
-        ActivateTask _ -> ActivateTask closeId
-        other -> other))
-    modTask closeId (outcome.traversed %~ (\oc -> case oc of
-        ActivateTask _ -> ActivateTask openId
-        other -> other))
-    doorId <- addObj $ obj & task.tasks <>~ [openId, closeId, breakId]
-                 & identity.name .~ "door"
-                 & identity.tags .~ ["boring"]
-    tasks.at openId.traversed.owner .= doorId
-    tasks.at closeId.traversed.owner .= doorId
-    tasks.at breakId.traversed.owner .= doorId
-    return (openId, closeId, breakId, doorId)
-
-pal :: T.Text -> Obj
-pal name' = obj & task .~ TaskSystem [] (M.fromList [(Labor, Skill Labor 3 2)]) Nothing NoGoal NeverAct
-                & identity.name .~ name'
-
-
--- mutually recursive tasks are a problem
+blankWorld :: World
+blankWorld = World 1 I.empty I.empty I.empty I.empty
 
 world :: World
-world = flip State.execState blankWorld $ do
-    (openId, closeId, breakId, doorId) <- door
-    jamesId <- addObj $ pal "James" 
-        & task.skills <>~ M.fromList [(Hacking, Skill Hacking 2 2)]
-        & task.goal .~ WorkOn 2
-    objs.at jamesId.traversed.task.work .= startWorkOn openId jamesId world
-    return ()
+world = addObjs [door, james] blankWorld
+
+main :: IO ()
+main = loop world
+  where
+    loop world = do
+        let world' = execState (tick 1 []) world
+        _ <- getLine
+        B.putStrLn $ A.encode world'
+        loop world'
