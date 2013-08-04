@@ -296,12 +296,12 @@ overlap phys1 phys2 = inSameSpace loc1 loc2 &&
     shape2 = phys2^.shape
     rectanglesOverlap :: (X,Y) -> (Width, Height) -> (X, Y) -> (Width, Height) -> Bool
     rectanglesOverlap (x1,y1) (w1,h1) (x2,y2) (w2,h2) =
-        any ((Rectangle w2 h2, (x2,y2)) `surrounds`) [(x1,y1),(x1+w1,y1),(x1,y1+h1),(x1+w1,y1+h1)] ||
-        any ((Rectangle w1 h1, (x1,y1)) `surrounds`) [(x2,y2),(x2+w2,y2),(x2,y2+h2),(x2+w2,y2+h2)]
+        any ((Rectangle w2 h2, (x2,y2)) `surrounds`) [(x1-w1/2,y1-h1/2),(x1+w1/2,y1-h1/2),(x1-w1/2,y1+h1/2),(x1+w1/2,y1+h1/2)] ||
+        any ((Rectangle w1 h1, (x1,y1)) `surrounds`) [(x2-w2/2,y2-h2/2),(x2+w2/2,y2-h2/2),(x2-w1/2,y2+h2/2),(x2+w2/2,y2+h2/2)]
     circleAndRectangleOverlap :: (X, Y, Radius) -> (X, Y, Width, Height) -> Bool
     circleAndRectangleOverlap (x1,y1,r) (x2,y2,w,h) =
-        any (`surrounds` (x1,y1)) (map ((,)(Circle r)) [(x2,y2),(x2+w,y2),(x2,y2+h),(x2+w,y2+h)]) ||
-        any (`surrounds` (x1,y1)) [(Rectangle (w+2*r) h, (x2-r,y2)), (Rectangle w (h+2*r), (x2, y2-r))]
+        any (`surrounds` (x1,y1)) (map ((,)(Circle r)) [(x2-w/2,y2-h/2),(x2+w/2,y2-h/2),(x2-w/2,y2+h/2),(x2+w/2,y2+h/2)]) ||
+        any (`surrounds` (x1,y1)) [(Rectangle (w+2*r) h, (x2-r-w/2,y2-h/2)), (Rectangle w (h+2*r), (x2-w/2, y2-r-h/2))]
 
 collide :: PhysicsComponent -> PhysicsComponent -> Bool
 collide phys1 phys2 = overlap phys1 phys2 && phys1^.blocking && phys2^.blocking
@@ -328,8 +328,8 @@ surrounds :: (Shape, Point) -> Point -> Bool
 surrounds (Rectangle w h, (x,y)) (x',y') = x <= x' && x' <= x+w && y <= y' && y' <= y+h
 surrounds (Circle r, (x,y)) (x',y') = (x-x')^^2 + (y-y')^^2 <= r^^2
 
-collidesWithAny :: PhysicsComponent -> World -> Bool
-collidesWithAny obj world = I.null $ I.filter (collide obj) (world ^. physics)
+collidesWithAny :: ObjId -> PhysicsComponent -> World -> Bool
+collidesWithAny objId obj world = not . I.null $ I.filter (collide obj) (world ^. physics & I.delete objId)
 
 nextStep :: Time -> World -> PhysicsComponent -> Destination -> Maybe (X,Y)
 nextStep time world phys destination = case destinationCoordinates world destination of
@@ -346,17 +346,17 @@ nextStep time world phys destination = case destinationCoordinates world destina
             Nothing -> Nothing
             Just phys -> Just (phys^.location._x, phys^.location._y)
 
-moveObj :: Time -> World -> Destination -> PhysicsComponent -> PhysicsComponent
-moveObj time world destination phys = case nextStep time world phys destination of
+moveObj :: Time -> World -> ObjId -> Destination -> PhysicsComponent -> PhysicsComponent
+moveObj time world objId destination phys = case nextStep time world phys destination of
     Nothing -> phys -- blocking shouldn't cause obj to give up on movement -- space.destination .~ Nothing $ obj
-    Just (x,y) -> if collidesWithAny phys' world then phys else phys'
+    Just (x,y) -> if collidesWithAny objId phys' world then phys else phys'
       where
         phys' = moveBy (x,y) phys
 
 tickPhysics :: Time -> World -> [(ObjId, Destination)] -> IntMap PhysicsComponent -> IntMap PhysicsComponent
 tickPhysics time world destinations pcs = foldr f pcs destinations
   where
-    f (objId, destination) = at objId.traversed %~ moveObj time world destination
+    f (objId, destination) = at objId.traversed %~ moveObj time world objId destination
 
 tickPhysicsM :: MonadState (IntMap PhysicsComponent) m => Time -> World -> [(ObjId, Destination)] -> m ()
 tickPhysicsM time world destinations = modify $ tickPhysics time world destinations
