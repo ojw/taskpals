@@ -7,31 +7,60 @@ import Maybe
 import Dict
 import List
 import JavaScript.Experimental
+import Mouse
 
-zoom = 3
+zoom = 8
+
+mapMouse : (Int, Int) -> (Float, Float) -> (Float, Float)
+mapMouse (w,h) (x,y) = ((x-(toFloat w/2))/zoom,((toFloat h/2)-y)/zoom)
+
+mouseInGame : Signal (Float, Float)
+mouseInGame = mapMouse <~ Window.dimensions ~ Mouse.position
 
 renderShapeAt shape (x,y) c = case shape of
     (Circle radius) -> circle (zoom * radius) |> filled c |> move (zoom * x, zoom * y)
     (Rectangle w h) -> rect (zoom * w) (zoom * h) |> filled c |> move (zoom * x,zoom * y)
 
+renderMenu phys = case phys.location of
+    (OnMap x y) -> [rectangle 50 20 |> filled (rgba 100 0 0 0.5) |> move (zoom * x, zoom * y)]
+
 renderPhys phys = case phys.location of
     (OnMap x y) -> Just <| renderShapeAt phys.shape (x,y) (if phys.blocking then red else blue)
     (InObj _ _ _) -> Nothing
 
-display : (Int, Int) -> a -> Element
-display (w,h) world = 
-    layers [ collage w h (Maybe.justs (map renderPhys (Dict.values world.physics)))
-           , asText world
-           ]
+pointIsIn : Shape -> Location -> (Float, Float) -> Bool
+pointIsIn shape location (x1,y1) = case (shape, location) of
+    (Circle r, (OnMap x2 y2)) -> (x2-x1)^2 + (y2-y1)^2 <= r^2
+    (Rectangle w h, (OnMap x2 y2)) -> (x2-w/2 < x1 && x1 < x2+w/2) && (y2-h/2 < y1 && y1 < y2+h/2)
+    _ -> False -- InObj is never moused over for now
 
-main : Signal Element
-main = display <~ Window.dimensions ~ worldSig
+pointIsInPhys (x,y) phys = pointIsIn phys.shape phys.location (x,y)
+
+-- display : (Int, Int) -> World -> (Float, Float) -> Element
+display (w,h) world (x,y) tasks = 
+    layers [ collage w h (Maybe.justs (map renderPhys (Dict.values world.physics)))
+           , asText <| tasks -- selected world (x,y)
+           ]
 
 input = WebSocket.connect "ws://0.0.0.0:3000" (constant "") 
 
--- worldSig : {physics: a, meta: b, tasks: c, work: d}
-worldSig : Signal World
-worldSig = worldDict <~ (Json.fromString <~ input)
+world : Signal World
+world = worldDict <~ (Json.fromString <~ input)
+
+main : Signal Element
+main = display <~ Window.dimensions ~ world ~ mouseInGame ~ clientState
+
+hovered = let f world point = case filter (pointIsInPhys point . snd) (Dict.toList world.physics) of
+                                ((objId, _) :: _) -> Just objId
+                                _ -> Nothing
+          in f <~ world ~ mouseInGame
+                                 
+selected = sampleOn Mouse.clicks hovered
+
+type ClientState = {hovered: Maybe ObjId, selected: Maybe ObjId}
+
+clientState : Signal ClientState
+clientState = let f hovered selected = {hovered = hovered, selected = selected} in f <~ hovered ~ selected
 
 type ObjId = Number
 data Destination = ToMap (Float,Float) | ToObj ObjId
