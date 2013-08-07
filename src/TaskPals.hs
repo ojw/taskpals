@@ -55,7 +55,7 @@ data Command = Command
     { _commandPlayer :: Player
     , _commandObjId :: ObjId
     , _commandGoal :: Goal
-    }
+    } deriving (Show)
 
 -------------------------------------------------------------------------------
 
