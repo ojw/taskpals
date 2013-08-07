@@ -1,4 +1,4 @@
-module Main where
+module Client.Main where
 
 import Window
 import WebSocket
@@ -6,8 +6,16 @@ import Json
 import Maybe
 import Dict
 import List
-import JavaScript.Experimental
 import Mouse
+import Automaton
+
+safeHead : [a] -> Maybe a
+safeHead list = case list of { (a::_) -> Just a; _ -> Nothing }
+
+mapMaybe : (a -> b) -> Maybe a -> Maybe b
+mapMaybe f a = case a of { Just val -> Just <| f val; Nothing -> Nothing }
+
+-- import Client.Render
 
 zoom = 8
 
@@ -18,14 +26,14 @@ mouseInGame : Signal (Float, Float)
 mouseInGame = mapMouse <~ Window.dimensions ~ Mouse.position
 
 renderShapeAt shape (x,y) c = case shape of
-    (Circle radius) -> circle (zoom * radius) |> filled c |> move (zoom * x, zoom * y)
+    (Circle radius) -> circle (zoom * radius) |> outlined (solid c) |> move (zoom * x, zoom * y)
     (Rectangle w h) -> rect (zoom * w) (zoom * h) |> filled c |> move (zoom * x,zoom * y)
 
 renderMenu phys = case phys.location of
     (OnMap x y) -> [rectangle 50 20 |> filled (rgba 100 0 0 0.5) |> move (zoom * x, zoom * y)]
 
-renderPhys phys = case phys.location of
-    (OnMap x y) -> Just <| renderShapeAt phys.shape (x,y) (if phys.blocking then red else blue)
+renderPhys clientState (objId, phys) = case phys.location of
+    (OnMap x y) -> Just <| renderShapeAt phys.shape (x,y) (if clientState.selected == Just objId then red else blue)
     (InObj _ _ _) -> Nothing
 
 pointIsIn : Shape -> Location -> (Float, Float) -> Bool
@@ -36,41 +44,61 @@ pointIsIn shape location (x1,y1) = case (shape, location) of
 
 pointIsInPhys (x,y) phys = pointIsIn phys.shape phys.location (x,y)
 
--- display : (Int, Int) -> World -> (Float, Float) -> Element
-display (w,h) world (x,y) tasks = 
-    layers [ collage w h (Maybe.justs (map renderPhys (Dict.values world.physics)))
-           , asText <| tasks -- selected world (x,y)
+-- display : (Int, Int) -> World -> CientState -> Element
+display (w,h) world clientState = 
+    layers [ collage w h . Maybe.justs . map (renderPhys clientState) . Dict.toList <| world.physics
+           , asText clientState
            ]
 
-input = WebSocket.connect "ws://0.0.0.0:3000" (constant "") 
+goTo : (Float, Float) -> JsonValue
+goTo (x,y) = Json.Object (Dict.fromList 
+    [("GoTo", Json.Object (Dict.fromList [("ToMap", Json.Array [Json.Number x, Json.Number y])]))])
+
+order : Signal JsonValue
+order = sampleOn Mouse.clicks (
+    (\(x,y) -> 
+        Json.Object (Dict.fromList 
+            [ ("Player", Json.String "James")
+            , ("ObjId", Json.Number 1)
+            , ("Goal", goTo (x,y))
+            ])) <~ mouseInGame)
+        
+output = sampleOn Mouse.clicks (Json.toString " " <~ order)
 
 world : Signal World
-world = worldDict <~ (Json.fromString <~ input)
+world = worldDict <~ WebSocket.connect "ws://0.0.0.0:3000" output
 
 main : Signal Element
-main = display <~ Window.dimensions ~ world ~ mouseInGame ~ clientState
+main = display <~ Window.dimensions ~ world ~ clientState
 
-hovered = let f world point = case filter (pointIsInPhys point . snd) (Dict.toList world.physics) of
-                                ((objId, _) :: _) -> Just objId
-                                _ -> Nothing
-          in f <~ world ~ mouseInGame
+hovered = (\point -> mapMaybe fst . safeHead . filter (pointIsInPhys point . snd) . Dict.toList . .physics)
+             <~ mouseInGame ~ world
                                  
-selected = sampleOn Mouse.clicks hovered
+selected = Automaton.run 
+    (Automaton.state Nothing (\hover current -> maybe current Just hover)) Nothing  
+    (sampleOn Mouse.clicks hovered)
 
-type ClientState = {hovered: Maybe ObjId, selected: Maybe ObjId}
+foo = Automaton.run (Automaton.state Nothing (\bar _ -> bar)) Nothing
+
+type ClientState = {hovered: Maybe Number, player: String, selected: Maybe Number}
 
 clientState : Signal ClientState
-clientState = let f hovered selected = {hovered = hovered, selected = selected} in f <~ hovered ~ selected
+clientState = let f hovered selected = {hovered = hovered, selected = selected, player = "James"} in f <~ hovered ~ selected
 
 type ObjId = Number
 data Destination = ToMap (Float,Float) | ToObj ObjId
 data Goal = GoTo Destination | WorkOn (ObjId, Number)
 data Shape = Circle Float | Rectangle Float Float
 data Location = OnMap Float Float | InObj ObjId Float Float
-type World = { meta: Dict Int -- Dict Int -- {name: String, tags: [String]}
-             , physics: Dict Int -- Dict Int --{shape: Shape, location: Location, speed: Int, blocking: Bool}
-             , work: Dict Int -- Dict Int --{}
-             , tasks: Dict Int
+type Skill = {level: Int, speed: Int, skillType: String}
+type Meta = {name: String, tags: [String]}
+type Physics = {location: Location, shape: Shape, speed: Float, blocking: Bool}
+type Task = {difficulty: Int, enabled: Bool, name: String, skill: Skill, workCompleted: Int, workRequired: Int, workType: String}
+type Work = {goal: Maybe Goal, skills: [Skill], work: Maybe Work}
+type World = { meta: Dict Int Meta
+             , physics: Dict Int Physics
+             , work: Dict Int -- Work
+             , tasks: Dict Int Task
              }
 
 toElmStr (String str) = str
@@ -112,7 +140,7 @@ toGoal json = case json of
         (Just (Object dict), _) -> case (lookup "ToMap" dict, lookup "ToObj" dict) of
             (Just (Array (Number x :: Number y :: [])), _) -> Just <| GoTo <| ToMap (x,y)
             (_, (Just (Number objId))) -> Just <| GoTo <| ToObj objId
-        (_, Just (Object dict)) -> dict
+        (_, Just (Object dict)) -> Nothing -- dict
         _ -> Nothing
     _ -> Nothing
 
@@ -129,7 +157,7 @@ toWork json = case json of
 
 work (Array (Number objId :: Object dict :: [])) = case (Dict.lookup "Goal" dict, Dict.lookup "GoalPref" dict, Dict.lookup "Skills" dict, Dict.lookup "Work" dict) of
     (Just goal, Just (Object goalPref), Just (Array skills), Just work) -> 
-        (1, {goal = toGoal goal, goalPref = toGoalPref goalPref, skills = map toSkill skills, work = toWork work})
+        (1, {goal = toGoal goal, {-goalPref = toGoalPref goalPref,-} skills = map toSkill skills, work = toWork work})
 
 -- (objId, dict)
 
@@ -152,7 +180,7 @@ taskComp jsonDict = case Dict.lookup "Tasks" jsonDict of
     Just (Array objTasks) -> Dict.fromList <| map objTask objTasks
     _ -> Dict.empty
 
-worldDict json = case json of
+worldDict string = case Json.fromString string of
     Just (Object dict) -> {tasks = taskComp dict, work=workComp dict, physics=physComp dict, meta=metaComp dict}
     _ -> {tasks = Dict.empty, work = Dict.empty, physics= Dict.empty, meta = Dict.empty}
 
