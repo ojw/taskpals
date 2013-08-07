@@ -11,7 +11,7 @@ import qualified Data.ByteString.Lazy.Char8 as Char8
 import qualified Data.ByteString.Lazy as B
 import Control.Proxy.Concurrent
 import Control.Lens
-import Control.Concurrent.STM.TVar as TVar
+import Control.Concurrent.STM.TVar as T
 import Control.Monad.State
 
 import TaskPals
@@ -22,10 +22,10 @@ type View = B.ByteString
 data Admin = SetState World
 
 data GameServer = GameServer
-    { _state :: TVar.TVar World
-    , _commands :: TVar.TVar [Command]
+    { _state :: T.TVar World
+    , _commands :: T.TVar [Command]
     , _configuration :: GameConfig
-    , _players :: TVar.TVar [(Player, Input View)]
+    , _players :: T.TVar [(Player, Input View)]
     , _commandIn :: Input Command
     , _commandOut :: Output Command
     , _adminIn :: Input Admin
