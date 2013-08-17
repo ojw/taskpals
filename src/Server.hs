@@ -10,9 +10,11 @@ import Control.Concurrent
 import qualified Data.ByteString.Lazy.Char8 as Char8
 import qualified Data.ByteString.Lazy as B
 import Control.Proxy.Concurrent
+import qualified Control.Proxy.Concurrent as Concurrent
 import Control.Lens
 import Control.Concurrent.STM.TVar as T
 import Control.Monad.State
+import Control.Applicative
 
 import TaskPals
 import SampleWorld hiding (main)
@@ -36,11 +38,7 @@ data GameServer = GameServer
 
 newGameServer :: World -> IO GameServer
 newGameServer world = do
-    (state, commands, players) <- atomically $ do
-        state <- newTVar world
-        commands <- newTVar []
-        players <- newTVar []
-        return (state, commands, players) 
+    (state, commands, players) <- atomically $ (,,) <$> newTVar world <*> newTVar [] <*> newTVar []
     (commandIn, commandOut) <- spawn Unbounded
     (adminIn, adminOut) <- spawn Unbounded
     (subscribeIn, subscribeOut) <- spawn Unbounded
@@ -79,7 +77,7 @@ tickWorker gameServer = do
         modifyTVar (_state gameServer) (execState $ tick 10000 commands)
         state' <- readTVar (_state gameServer)
         return (state', subscribers)
-    mapM_ (\(_,viewIn) -> atomically $ Control.Proxy.Concurrent.send viewIn $ A.encode state')  subscribers
+    mapM_ (\(_,viewIn) -> atomically $ Concurrent.send viewIn $ A.encode state')  subscribers
     threadDelay 10000
     tickWorker gameServer
     
@@ -111,9 +109,8 @@ startWebSocketServer (SocketServerConfig addr port) subscribeIn commandIn = runS
     liftIO . putStrLn $ "Client connected."
     liftIO . forkIO $ spamClient viewOut sink
     spamServer (commandIn)
-    -- send viewIn to gameServer
 
-spamClient :: Output View -> Sink Hybi00 -> IO () -- WebSockets Hybi00 ()
+spamClient :: Output View -> Sink Hybi00 -> IO ()
 spamClient viewOut sink = do
     state <- atomically $ recv viewOut
     maybe (spamClient viewOut sink) (\view -> sendSink sink (textData view) >> spamClient viewOut sink) state
@@ -121,7 +118,7 @@ spamClient viewOut sink = do
 spamServer :: Input Command -> WebSockets Hybi00 ()
 spamServer commandIn = do
     mCommand <- receiveData
-    -- liftIO . Char8.putStrLn $ mCommand
+    liftIO . Char8.putStrLn $ mCommand
     case A.decode mCommand of
         Just command -> do sent <- liftIO . atomically $ Control.Proxy.Concurrent.send commandIn command
                            if sent then spamServer commandIn else spamServer commandIn
