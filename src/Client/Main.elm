@@ -8,10 +8,14 @@ import JavaScript.Experimental
 import Dict
 import Char
 import List
+import Window
+import Maybe
+import Automaton
 
-main = plainText . show . worldDict . JavaScript.toString <~ input
+{-main = plainText . show . worldDict . JavaScript.toString <~ input-}
 
-loopOut = JavaScript.fromString <~ WebSocket.connect "ws://localhost:3000" (show <~ sampleOn Mouse.clicks Mouse.position)
+loopOut = JavaScript.fromString <~ WebSocket.connect "ws://localhost:3000" 
+     (sampleOn Mouse.clicks (Json.toString "" . order <~ mouseInGame))
 
 foreign import jsevent "input"
     (JavaScript.fromString "YARK")
@@ -20,58 +24,105 @@ foreign import jsevent "input"
 foreign export jsevent "loopOut"
     loopOut : Signal JavaScript.JSString
 
-{-display mworld = case mworld of-}
-    {-Nothing -> "No world :/"-}
-    {-Just world -> show <| fixWorld world-}
+safeHead : [a] -> Maybe a
+safeHead list = case list of { (a::_) -> Just a; _ -> Nothing }
 
-renderPhys phys = case (phys.location, phys.shape) of
-    ({onMap}, {circle}) -> "COICLE"
-    ({onMap}, {rectangle}) -> "RECTONGLE"
-    _ -> "DERP"
-
-unsafeListToPair : [a] -> (a,a)
-unsafeListToPair list = (head list, head . drop 1 <| list)
-
-{-toWorld mjson = case Json.fromJSString mjson of-}
-    {-Nothing -> {meta = Dict.empty, physics = Dict.empty, nextObj = 0, work = Dict.empty, tasks = Dict.empty}-}
-    {-Just json -> fixWorld . JavaScript.Experimental.toRecord . Json.toJSObject . fixCases <| json-}
-
-{-fixWorld world = let fixHeteroList list = case list of-}
-                        {-([first, second]::rest) -> (first, second) :: fixHeteroList rest-}
-                        {-_ -> []-}
-                 {-in { world | physics <- Dict.fromList . fixHeteroList <| world.physics-}
-                            {-, work <- Dict.fromList . fixHeteroList <| world.work -}
-                            {-, tasks <- Dict.map (Dict.fromList . fixHeteroList) <| Dict.fromList . fixHeteroList <| world.tasks-}
-                            {-, meta <- Dict.fromList . fixHeteroList <| world.meta }-}
+mapMaybe : (a -> b) -> Maybe a -> Maybe b
+mapMaybe f a = case a of { Just val -> Just <| f val; Nothing -> Nothing }
 
 
-{-fixCases : Json.JsonValue -> Json.JsonValue-}
-{-fixCases value = let lowerHead : String -> String-}
-                     {-lowerHead string = case string of-}
-                        {-(x::xs) -> Char.toLower x :: xs-}
-                        {-[] -> []-}
-                 {-in case value of-}
-                    {-Json.String string -> Json.String <| lowerHead string-}
-                    {-Json.Array a -> Json.Array <| map fixCases a-}
-                    {-Json.Object d -> Json.Object <| Dict.fromList . map (\(k,v) -> (lowerHead k, fixCases v))  . Dict.toList <| d -}
-                    {-jsonValue -> jsonValue -}
+zoom = 8
 
+mouseInGame : Signal (Int, Int)
+mouseInGame = let mapMouse : (Int, Int) -> (Int, Int) -> (Int, Int)
+                  mapMouse (w1,h1) (x1,y1) = let x = toFloat x1
+                                                 y = toFloat y1
+                                                 w = toFloat w1
+                                                 h = toFloat h1 in
+                      (round ((x-(w/2))/zoom),round (((h/2)-y)/zoom))
+              in mapMouse <~ Window.dimensions ~ Mouse.position
+
+renderShapeAt shape (x,y) c = case shape of
+    (Circle radius) -> circle (zoom * toFloat radius) |> outlined (solid c) |> move (zoom * toFloat x, zoom * toFloat y)
+    (Rectangle w h) -> rect (zoom * toFloat w) (zoom * toFloat h) |> filled c |> move (zoom * toFloat x,zoom * toFloat y)
+
+renderMenu phys = case phys.location of
+    (OnMap x y) -> [rect 50 20 |> filled (rgba 100 0 0 0.5) |> move (zoom * toFloat x, zoom * toFloat y)]
+
+renderPhys clientState (objId, phys) = case phys.location of
+    (OnMap x y) -> Just <| renderShapeAt phys.shape (x,y) (if clientState.selected == Just objId then red else blue)
+    (InObj _ _ _) -> Nothing
+
+
+pointIsIn : Shape -> Location -> (Float, Float) -> Bool
+pointIsIn shape location (x1,y1) = case (shape, location) of
+    (Circle r', (OnMap x2' y2')) -> 
+        let r = toFloat r'
+            x2 = toFloat x2'
+            y2 = toFloat y2'
+        in (x2-x1)^2 + (y2-y1)^2 <= r^2
+    (Rectangle w' h', (OnMap x2' y2')) -> 
+        let w = toFloat w'
+            h = toFloat h'
+            x2 = toFloat x2'
+            y2 = toFloat y2'
+        in (x2-w/2 < x1 && x1 < x2+w/2) && (y2-h/2 < y1 && y1 < y2+h/2)
+    _ -> False -- InObj is never moused over for now
+
+pointIsInPhys (x,y) phys = pointIsIn phys.shape phys.location (toFloat x, toFloat y)
+
+display (w,h) world clientState = 
+    layers [ collage w h . Maybe.justs . map (renderPhys clientState) . Dict.toList <| world.physics
+           , asText clientState
+           ]
+
+hovered = (\point -> mapMaybe fst . safeHead . filter (pointIsInPhys point . snd) . Dict.toList . .physics)
+             <~ mouseInGame ~ world
+
+selected = Automaton.run 
+    (Automaton.state Nothing (\hover current -> maybe current Just hover)) Nothing  
+    (sampleOn Mouse.clicks hovered)
+
+-- type ClientState = {hovered: Maybe Int, player: String, selected: Maybe Int}
+
+f hovered selected = {hovered = hovered, selected = selected, player = "James"}
+
+-- clientState : Signal ClientState
+clientState = f <~ hovered ~ selected
+
+
+goTo : (Int, Int) -> Json.JsonValue
+goTo (x,y) = Json.Object (Dict.fromList 
+    [("GoTo", Json.Object (Dict.fromList [("ToMap", Json.Array [Json.Number <| toFloat x, Json.Number <| toFloat y])]))])
+
+order : (Int, Int) -> Json.JsonValue
+order pt = Json.Object (Dict.fromList 
+            [ ("Player", Json.String "James")
+            , ("ObjId", Json.Number 1)
+            , ("Goal", goTo pt)
+            ])
+
+world = worldDict . JavaScript.toString <~ input
+
+main : Signal Element
+main = display <~ Window.dimensions ~ world ~ clientState
+{-main = plainText . show . Json.fromString . JavaScript.toString <~ input-}
 
 type ObjId = Int
-data Destination = ToMap (Float,Float) | ToObj ObjId
+data Destination = ToMap (Int,Int) | ToObj ObjId
 data Goal = GoTo Destination | WorkOn (ObjId, Int)
-data Shape = Circle Float | Rectangle Float Float
-data Location = OnMap Float Float | InObj ObjId Float Float
+data Shape = Circle Int | Rectangle Int Int
+data Location = OnMap Int Int | InObj ObjId Int Int
 type Skill = {level: Int, speed: Int, skillType: String}
-type Meta = {name: String, tags: [String]}
-type Physics = {location: Location, shape: Shape, speed: Float, blocking: Bool}
-type Task = {difficulty: Int, enabled: Bool, name: String, skill: Skill, workCompleted: Int, workRequired: Int, workType: String}
-type Work = {goal: Maybe Goal, skills: [Skill], work: Maybe a}
-type World = { meta: Dict.Dict Int Meta
-             , physics: Dict.Dict Int Physics
-             , work: Dict.Dict Int -- Work
-             , tasks: Dict.Dict Int Task
-             }
+{-type Meta = {name: String, tags: [String]}-}
+{-type Physics = {location: Location, shape: Shape, speed: Float, blocking: Bool}-}
+{-type Task = {difficulty: Int, enabled: Bool, name: String, skill: Skill, workCompleted: Int, workRequired: Int, workType: String}-}
+{-type Work = {goal: Maybe Goal, skills: [Skill], work: Maybe a}-}
+{-type World = { meta: Dict.Dict Int Meta-}
+             {-, physics: Dict.Dict Int Physics-}
+             {-, work: Dict.Dict Int -- Work-}
+             {-, tasks: Dict.Dict Int Task-}
+             {-}-}
 
 -------------------------------
 -- Fixed old code to parse JSON
@@ -92,13 +143,13 @@ metaComp jsonDict = case Dict.lookup "Meta" jsonDict of
     _ -> Dict.empty
 
 toShape jsonDict = case (Dict.lookup "Circle" jsonDict, Dict.lookup "Rectangle" jsonDict) of
-    (Just (Json.Number radius), _) -> Circle radius
-    (_, Just (Json.Array (Json.Number w :: Json.Number h :: []))) -> Rectangle w h
+    (Just (Json.Number radius), _) -> Circle <| round radius
+    (_, Just (Json.Array (Json.Number w :: Json.Number h :: []))) -> Rectangle (round w) (round h)
 
 -- NOTE: need to test InObj branch
 toLocation jsonDict = case (Dict.lookup "OnMap" jsonDict, Dict.lookup "InObj" jsonDict) of
-    (Just (Json.Array (Json.Number x :: Json.Number y :: [])), _) -> OnMap x y -- {x=x,y=y}
-    (_, Just (Json.Array (Json.Number objId :: (Json.Array (Json.Number x :: Json.Number y :: [])) :: [] ))) -> InObj (round objId) x y -- {x=x,y=y}
+    (Just (Json.Array (Json.Number x :: Json.Number y :: [])), _) -> OnMap (round x) (round y) -- {x=x,y=y}
+    (_, Just (Json.Array (Json.Number objId :: (Json.Array (Json.Number x :: Json.Number y :: [])) :: [] ))) -> InObj (round objId) (round x) (round y) -- {x=x,y=y}
 
 -- Having a pattern matching issue.  This hack is grotesque.
 boolHack boolStr = if boolStr == "Bool True" then True else False
@@ -115,15 +166,16 @@ physComp jsonDict =
         Just (Json.Array physes) -> Dict.fromList <| map phys physes
         _ -> Dict.empty
 
-toGoal json = case json of
-    Json.Null -> Nothing
-    (Json.Object dict) -> case (lookup "GoTo" dict, lookup "WorkOn" dict) of
-        (Just (Json.Object dict), _) -> case (lookup "ToMap" dict, lookup "ToObj" dict) of
-            (Just (Json.Array (Json.Number x :: Json.Number y :: [])), _) -> Just <| GoTo <| ToMap (x,y)
-            (_, (Just (Json.Number objId))) -> Just . GoTo . ToObj <| round objId
-        (_, Just (Json.Object dict)) -> Nothing -- dict
-        _ -> Nothing
-    _ -> Nothing
+toGoal json = "FOOOO"
+    {-case json of-}
+        {-Json.Null -> Nothing-}
+        {-(Json.Object dict) -> case (lookup "GoTo" dict, lookup "WorkOn" dict) of-}
+            {-(Just (Json.Object dict), _) -> case (lookup "ToMap" dict, lookup "ToObj" dict) of-}
+                {-(Just (Json.Array (Json.Number x :: Json.Number y :: [])), _) -> Just <| GoTo <| ToMap (round x, round y)-}
+                {-(_, (Just (Json.Number objId))) -> Just . GoTo . ToObj <| round objId-}
+            {-(_, Just (Json.Object dict)) -> Nothing -- dict-}
+            {-_ -> Nothing-}
+        {-_ -> Nothing-}
 
 -- Not a serious implementation :/
 toGoalPref json = Nothing
