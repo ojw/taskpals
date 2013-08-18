@@ -18,5 +18,6 @@ executable taskpals
   main-is:             Main.hs
   -- other-modules:       
   build-depends:       base ==4.5.*, lens, text, bytestring, containers, mtl,
-                       aeson, websockets, unordered-containers, pipes-concurrency
+                       aeson, websockets, unordered-containers, pipes-concurrency,
+                       stm
   hs-source-dirs:      src
