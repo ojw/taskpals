@@ -12,8 +12,7 @@ import Window
 import Maybe
 import Automaton
 
-loopOut = JavaScript.fromString <~ WebSocket.connect "ws://localhost:3000" 
-     (sampleOn Mouse.clicks (Json.toString "" . order <~ mouseInGame))
+loopOut = JavaScript.fromString <~ WebSocket.connect "ws://localhost:3000" orderSig
 
 foreign import jsevent "input"
     (JavaScript.fromString "YARK")
@@ -58,7 +57,7 @@ pointIsInPhys (x,y) phys = pointIsIn phys.shape phys.location (toFloat x, toFloa
 
 display (w,h) world clientState = 
     layers [ collage w h . Maybe.justs . map (renderPhys clientState) . Dict.toList <| world.physics
-           , asText world-- clientState
+           , asText clientState
            ]
 
 hovered = (\point -> mapMaybe fst . safeHead . filter (pointIsInPhys point . snd) . Dict.toList . .physics)
@@ -80,12 +79,19 @@ goTo : (Int, Int) -> Json.JsonValue
 goTo (x,y) = Json.Object (Dict.fromList 
     [("GoTo", Json.Object (Dict.fromList [("ToMap", Json.Array [Json.Number <| toFloat x, Json.Number <| toFloat y])]))])
 
-order : (Int, Int) -> Json.JsonValue
-order pt = Json.Object (Dict.fromList 
+orderSig : Signal String
+orderSig = sampleOn Mouse.clicks (Json.toString "" <~ (order <~ mouseInGame ~ clientState))
+
+-- order : (Int, Int) -> Json.JsonValue
+order pt clientState = case clientState.selected of
+    Just objId -> if Maybe.isNothing clientState.hovered then
+        Json.Object (Dict.fromList 
             [ ("Player", Json.String "James")
-            , ("ObjId", Json.Number 1)
+            , ("ObjId", Json.Number objId)
             , ("Goal", goTo pt)
             ])
+                                                         else Json.Null
+    _ -> Json.Null
 
 world = worldDict . JavaScript.toString <~ input
 
@@ -118,10 +124,11 @@ toElmStr (Json.String str) = str
 lookup = Dict.lookup
 
 meta json = case json of
-    Json.Array (Json.Number objId :: Json.Object dict :: []) -> case (Dict.lookup "Name" dict, Dict.lookup "Tags" dict) of
-            (Just (Json.String n), Just (Json.Array ts)) -> (objId, {name=n, tags = map toElmStr ts})
-            _ -> (-1, {name="", tags = []})
-    _ -> (-1, {name="", tags = []})
+    Json.Array (Json.Number objId :: Json.Object dict :: []) -> case (Dict.lookup "Name" dict, Dict.lookup "Tags" dict, Dict.lookup "Owner" dict) of
+            (Just (Json.String n), Just (Json.Array ts), Just (Json.Null)) -> (objId, {name=n, tags = map toElmStr ts, owner = Nothing})
+            (Just (Json.String n), Just (Json.Array ts), Just (Json.String owner)) -> (objId, {name=n, tags = map toElmStr ts, owner = Just owner})
+            _ -> (-1, {name="", tags = [], owner = Just <| show json})
+    _ -> (-1, {name="", tags = [], owner = Just <| show json})
 
 metaComp jsonDict = case Dict.lookup "Meta" jsonDict of
     Just (Json.Array metas) -> Dict.fromList <| map meta metas
