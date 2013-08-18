@@ -17,7 +17,7 @@ import Control.Monad.State
 import Control.Applicative
 
 import TaskPals
-import SampleWorld hiding (main)
+import SampleWorld
 
 data GameConfig = GameConfig
 type View = B.ByteString
@@ -48,14 +48,6 @@ data SocketServerConfig = SocketServerConfig
     { _address :: String
     , _port :: Int
     }
-
-main :: IO ()
-main = do
-    putStrLn "Initializing game server..."
-    gameServer <- newGameServer world
-    forkIO $ runGameServer gameServer
-    putStrLn "Initializing websocket server..."
-    startWebSocketServer testConfig (_subscribeIn gameServer) (_commandIn gameServer)
 
 delta = 10000
 
@@ -118,7 +110,6 @@ spamClient viewOut sink = do
 spamServer :: Input Command -> WebSockets Hybi00 ()
 spamServer commandIn = do
     mCommand <- receiveData
-    liftIO . Char8.putStrLn $ mCommand
     case A.decode mCommand of
         Just command -> do sent <- liftIO . atomically $ Control.Proxy.Concurrent.send commandIn command
                            if sent then spamServer commandIn else spamServer commandIn

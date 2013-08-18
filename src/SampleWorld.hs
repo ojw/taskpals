@@ -33,18 +33,18 @@ door objId =
                              , (2, Task "Close" Close Labor 0 2 0 [EnableTask (objId, 1), DisableThisTask, SetBlocking True] False)
                              , (3, Task "Break" Break Labor 2 5 0 [] True)
                              ]
-    , CompMeta $ MetaComponent "Door" []
+    , CompMeta $ MetaComponent "Door" [] Nothing
     ]
 
 james :: Obj
 james objId =
-    [ CompPhysics $ PhysicsComponent (OnMap (0,0)) (Circle 3) 1 True
+    [ CompPhysics $ PhysicsComponent (OnMap (0,0)) (Circle 3) 3 True
     , CompTasks $ I.fromList [ (1, Task "Kill" Break Combat 0 10 0 [RemoveThisObj] True)
                              , (2, Task "Heal" Fix Medical 0 1 0 [ResetThisTask, RemoveWorkFrom (objId, 1) 1] True)
                              ]
-    , CompWork $ WorkComponent NeverAct (Just $ WorkOn (2,1)) Nothing [(Skill Labor 1 1)]
-    -- , CompWork $ WorkComponent NeverAct (Just $ GoTo (ToMap (2,2))) Nothing [(Skill Labor 1 1)]
-    , CompMeta $ MetaComponent "James" ["pal"]
+    -- , CompWork $ WorkComponent NeverAct (Just $ WorkOn (2,1)) Nothing [(Skill Labor 1 1)]
+    , CompWork $ WorkComponent NeverAct (Just $ GoTo (ToMap (2,2))) Nothing [(Skill Labor 1 1)]
+    , CompMeta $ MetaComponent "James" ["pal"] (Just "James")
     ]
 
 blankWorld :: World
@@ -52,12 +52,3 @@ blankWorld = World 1 I.empty I.empty I.empty I.empty
 
 world :: World
 world = addObjs [door, james] blankWorld
-
-main :: IO ()
-main = loop world
-  where
-    loop world = do
-        let world' = execState (tick 1 []) world
-        _ <- getLine
-        B.putStrLn $ A.encode world'
-        loop world'
