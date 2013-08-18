@@ -109,8 +109,9 @@ data Location = OnMap (X,Y) | InObj ObjId (X,Y) deriving (Read, Show, Data, Type
 data Shape = Circle Radius | Rectangle Width Height deriving (Read, Show, Data, Typeable, Eq)
 
 data MetaComponent = MetaComponent
-    { _objidentityName :: Text
-    , _objidentityTags :: [Tag]
+    { _metaName :: Text
+    , _metaTags :: [Tag]
+    , _metaOwner :: Maybe Player
     } deriving (Read, Show, Data, Typeable, Eq)
 
 data Component = CompWork WorkComponent | CompTasks TaskComponent | CompPhysics PhysicsComponent | CompMeta MetaComponent
