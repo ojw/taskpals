@@ -2,3 +2,5 @@ cabal-dev
 dist
 *.swp
 .*
+build/
+cache/
