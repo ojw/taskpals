@@ -206,7 +206,7 @@ tickWork time world objId wc = case wc^.goal of
     Just (GoTo destination)         -> (wc & work.~ Nothing, (Nothing, Just destination))
     Just (WorkOn (taskObj, taskId)) -> (wc',                 (done,    dest))
       where
-        (wc', done) = case world^?tasks.at taskObj.traversed.at taskId.traversed of
+        (wc', done) = case world ^? tasks.ix taskObj.ix taskId of
             Just task -> workOn time objId (taskObj, taskId) task wc
             Nothing -> (wc & goal .~ Nothing & work .~ Nothing, Nothing)
         dest = Just $ ToObj taskObj
@@ -238,9 +238,9 @@ tickTasks newWork tcs = foldr f (tcs, []) newWork
     f work (tcs, events) = let (tcs', events') = tickTask' work tcs in (tcs', events' ++ events)
 
 tickTask' :: (Int, ObjId, TaskId) -> IntMap TaskComponent -> (IntMap TaskComponent, [(TaskId, ObjId, TaskEvent)])
-tickTask' (newWork, worker, taskId) tcs = case tcs^.at (fst taskId) of -- .traversed.at (snd taskId) of
+tickTask' (newWork, worker, taskId) tcs = case tcs ^? ix (fst taskId) of
     Nothing -> (tcs, [])
-    Just tasks -> case tasks^.at (snd taskId) of
+    Just tasks -> case tasks ^? ix (snd taskId) of
         Nothing -> (tcs, [])
         Just task -> case tickTask worker taskId task newWork of
             (task', mEvents) -> (tcs & I.adjust (I.insert (snd taskId) task') (fst taskId), join $ maybeToList mEvents)
@@ -325,7 +325,7 @@ nextStep time world phys destination = case destinationCoordinates world destina
                     Just (speedConstant * time * s * (x2-x1)/hyp, 
                           speedConstant * time * s * (y2-y1)/hyp)
   where destinationCoordinates world (ToMap (x,y)) = Just (x, y)
-        destinationCoordinates world (ToObj objId) = case world^.physics.at objId of
+        destinationCoordinates world (ToObj objId) = case world ^? physics.ix objId of
             Nothing -> Nothing
             Just phys -> Just (phys^.location._x, phys^.location._y)
 
@@ -339,7 +339,7 @@ moveObj time world objId destination phys = case nextStep time world phys destin
 tickPhysics :: Time -> World -> [(ObjId, Destination)] -> IntMap PhysicsComponent -> IntMap PhysicsComponent
 tickPhysics time world destinations pcs = foldr f pcs destinations
   where
-    f (objId, destination) = at objId.traversed %~ moveObj time world objId destination
+    f (objId, destination) = ix objId %~ moveObj time world objId destination
 
 tickPhysicsM :: MonadState (IntMap PhysicsComponent) m => Time -> World -> [(ObjId, Destination)] -> m ()
 tickPhysicsM time world destinations = modify $ tickPhysics time world destinations
@@ -351,14 +351,14 @@ inTarget None _ _ _ = False
 inTarget Self targetter target world = targetter == target
 inTarget (AtObj targetId) targetter target world = targetId == target
 inTarget (WithinRadius radius) targetter target world = maybe False (uncurry overlap) $ do
-    targetterLocation <- world^?physics.at targetter.traversed.location
-    targetPhysics <- world^.physics.at target
+    targetterLocation <- world ^? physics.ix targetter.location
+    targetPhysics <- world ^? physics.ix target
     return (PhysicsComponent targetterLocation (Circle radius) 0 False, targetPhysics)
 inTarget (InCircle locatn radius) targetter target world = maybe False (uncurry overlap) $ do
-    targetPhysics <- world^.physics.at target
+    targetPhysics <- world ^? physics.ix target
     return (PhysicsComponent locatn (Circle radius) 0 False, targetPhysics)
 inTarget (InRectangle locatn (width, height)) targetter target world = maybe False (uncurry overlap) $ do
-    targetPhysics <- world^.physics.at target
+    targetPhysics <- world ^? physics.ix target
     return (PhysicsComponent locatn (Rectangle width height) 0 False, targetPhysics)
     
 runEvents :: [(TaskId, ObjId, TaskEvent)] -> World -> World
@@ -370,11 +370,11 @@ runEventsM :: MonadState World m => [(TaskId, ObjId, TaskEvent)] -> m ()
 runEventsM events = modify $ runEvents events
 
 runEvent :: TaskId -> ObjId -> TaskEvent -> World -> World
-runEvent taskId objId ResetThisTask = tasks.at (fst taskId).traversed.at (snd taskId).traversed.workCompleted .~ 0
-runEvent taskId objId DisableThisTask = tasks.at (fst taskId).traversed.at (snd taskId).traversed.enabled .~ False
-runEvent taskId objId (EnableTask taskId') = tasks.at (fst taskId').traversed.at (snd taskId').traversed.enabled .~ True
-runEvent taskId objId (DisableTask taskId') = tasks.at (fst taskId').traversed.at (snd taskId').traversed.enabled .~ False
-runEvent taskId objId (SetBlocking blocking') = physics.at (fst taskId).traversed.blocking .~ blocking'
+runEvent taskId objId ResetThisTask = tasks.ix (fst taskId).ix (snd taskId).workCompleted .~ 0
+runEvent taskId objId DisableThisTask = tasks.ix (fst taskId).ix (snd taskId).enabled .~ False
+runEvent taskId objId (EnableTask taskId') = tasks.ix (fst taskId').ix (snd taskId').enabled .~ True
+runEvent taskId objId (DisableTask taskId') = tasks.ix (fst taskId').ix (snd taskId').enabled .~ False
+runEvent taskId objId (SetBlocking blocking') = physics.ix (fst taskId).blocking .~ blocking'
 runEvent taskId objId (CreateWork workType amount target) = id 
 runEvent taskId objId (RemoveWorkFrom taskId' amount) = id 
 runEvent _ _ _ = id
