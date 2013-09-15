@@ -22,25 +22,25 @@ import TaskPals
 import SampleWorld
 
 data ServerCommand = GameCommand Command | Join Player
-deriveJSON (dropWhile (not . Char.isUpper)) ''ServerCommand
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''ServerCommand
 
-deriveJSON (dropWhile (not . Char.isUpper)) ''Skill
-deriveJSON (dropWhile (not . Char.isUpper)) ''SkillType
-deriveJSON (dropWhile (not . Char.isUpper)) ''WorkType
-deriveJSON (dropWhile (not . Char.isUpper)) ''Command
-deriveJSON (dropWhile (not . Char.isUpper)) ''Location
-deriveJSON (dropWhile (not . Char.isUpper)) ''Destination
-deriveJSON (dropWhile (not . Char.isUpper)) ''Goal
-deriveJSON (dropWhile (not . Char.isUpper)) ''Task
-deriveJSON (dropWhile (not . Char.isUpper)) ''PhysicsComponent
-deriveJSON (dropWhile (not . Char.isUpper)) ''MetaComponent
-deriveJSON (dropWhile (not . Char.isUpper)) ''TaskEvent
-deriveJSON (dropWhile (not . Char.isUpper)) ''Shape
-deriveJSON (dropWhile (not . Char.isUpper)) ''GoalPref
-deriveJSON (dropWhile (not . Char.isUpper)) ''Target
-deriveJSON (dropWhile (not . Char.isUpper)) ''Work
-deriveJSON (dropWhile (not . Char.isUpper)) ''WorkComponent
-deriveJSON (dropWhile (not . Char.isUpper)) ''World
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Skill
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''SkillType
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''WorkType
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Command
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Location
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Destination
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Goal
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Task
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''PhysicsComponent
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''MetaComponent
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''TaskEvent
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Shape
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''GoalPref
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Target
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Work
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''WorkComponent
+deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''World
 
 data GameConfig = GameConfig
 type View = B.ByteString
