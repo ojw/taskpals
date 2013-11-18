@@ -22,6 +22,7 @@ import TaskPals
 import SampleWorld
 
 data ServerCommand = GameCommand Command | Join Player
+
 deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''ServerCommand
 
 deriveJSON (defaultOptions {fieldLabelModifier = (dropWhile (not . Char.isUpper))}) ''Skill
